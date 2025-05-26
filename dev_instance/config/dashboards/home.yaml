@@ -4,6 +4,3 @@ views:
     path: test
     cards:
       - type: custom:goal-tracker-card
-        expected_progress: 80
-        actual_progress: 65
-        days: [done, done, missed, partial, done, done, missed]
