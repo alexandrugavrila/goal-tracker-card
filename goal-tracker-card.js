@@ -239,10 +239,12 @@ class GoalTrackerCard extends LitElement {
             @input=${(e) => (this.newGoal.daysPerWeek = Number(e.target.value))}
           />
           <button @click=${this._saveGoal}>Save</button>
+          <button style="background-color: gray;" @click=${this._closeAddModal}>Cancel</button>
         </div>
       </div>
     `;
   }
+
 
   _openAddModal() {
     this.newGoal = {
