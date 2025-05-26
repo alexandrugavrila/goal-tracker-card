@@ -1,6 +1,10 @@
+//#region ===== Imports and Setup =====
 import { LitElement, html, css } from "/local/vendor/lit/lit.js";
+//#endregion
 
+//#region ===== Component Definition =====
 class GoalTrackerCard extends LitElement {
+  //#region ===== Reactive Properties =====
   static properties = {
     hass: {},
     config: {},
@@ -9,7 +13,9 @@ class GoalTrackerCard extends LitElement {
     newGoal: { state: true },
     confirmingDelete: { state: true },
   };
+  //#endregion
 
+  //#region ===== Styles =====
   static styles = css`
     .goal-list {
       display: flex;
@@ -23,9 +29,15 @@ class GoalTrackerCard extends LitElement {
       border-radius: 8px;
     }
 
+    .goal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
     .goal-title {
       font-weight: bold;
-      margin-bottom: 6px;
     }
 
     .goal-bar {
@@ -52,6 +64,33 @@ class GoalTrackerCard extends LitElement {
       height: 20px;
       background: #eee;
       border-radius: 4px;
+    }
+
+    button {
+      margin-top: 10px;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      background-color: #3498db;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #2980b9;
+    }
+
+    .delete-button {
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: #b00;
+      padding: 0;
+    }
+
+    .delete-button:hover {
+      color: #f00;
     }
 
     .modal {
@@ -90,62 +129,28 @@ class GoalTrackerCard extends LitElement {
       box-sizing: border-box;
     }
 
-    button {
-      margin-top: 10px;
-      padding: 8px 16px;
-      border: none;
-      border-radius: 6px;
-      background-color: #3498db;
-      color: white;
-      cursor: pointer;
-    }
-
-    button:hover {
-      background-color: #2980b9;
-    }
-
-    .goal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 6px;
-    }
-
-    .goal-title {
-      font-weight: bold;
-    }
-
-    .delete-button {
-      background: none;
-      border: none;
-      font-size: 18px;
-      cursor: pointer;
-      color: #b00;
-      padding: 0;
-    }
-
-    .delete-button:hover {
-      color: #f00;
-    }
-
     .confirm-delete {
       margin-bottom: 8px;
     }
   `;
+  //#endregion
 
+  //#region ===== Constructor & Configuration =====
   constructor() {
     super();
     this.goals = [];
     this.showModal = false;
     this.newGoal = {};
+    this.confirmingDelete = null;
   }
 
   setConfig(config) {
     this.config = config || {};
     this.goals = this.config.goals || [];
-    this.confirmingDelete = null; // Holds goal currently pending deletion
   }
+  //#endregion
 
+  //#region ===== Lifecycle and Rendering =====
   render() {
     return html`
       <div class="goal-list">
@@ -161,11 +166,7 @@ class GoalTrackerCard extends LitElement {
   }
 
   _renderGoal(goal) {
-    const totalDays = this._calculateWorkingDays(
-      goal.start,
-      goal.end,
-      goal.daysPerWeek
-    );
+    const totalDays = this._calculateWorkingDays(goal.start, goal.end, goal.daysPerWeek);
     const progressPercent = Math.min((goal.progress / goal.target) * 100, 100);
     const daysDone = Math.round((goal.progress / goal.target) * totalDays);
 
@@ -175,20 +176,14 @@ class GoalTrackerCard extends LitElement {
           <div class="goal-title">
             ${goal.name} (${goal.progress}/${goal.target} ${goal.unit})
           </div>
-          <button
-            class="delete-button"
-            title="Remove goal"
-            @click=${() => this._confirmRemove(goal)}
-          >
-            🗑️
-          </button>
+          <button class="delete-button" title="Remove goal" @click=${() => this._confirmRemove(goal)}>🗑️</button>
         </div>
 
         ${this.confirmingDelete === goal
           ? html`
               <div class="confirm-delete">
                 <em>Are you sure?</em>
-                <button @click=${() => this._removeGoal(goal)}>Yes</button>
+                <button @click=${() => this._removeGoalImmediately(goal)}>Yes</button>
                 <button @click=${this._cancelRemove}>No</button>
               </div>
             `
@@ -214,36 +209,37 @@ class GoalTrackerCard extends LitElement {
         <div class="modal-content" @click=${(e) => e.stopPropagation()}>
           <h2>New Goal</h2>
           <label>Name</label>
-          <input
-            type="text"
-            @input=${(e) => (this.newGoal.name = e.target.value)}
-          />
+          <input type="text" @input=${(e) => (this.newGoal.name = e.target.value)} />
           <label>Unit</label>
-          <input
-            type="text"
-            @input=${(e) => (this.newGoal.unit = e.target.value)}
-          />
+          <input type="text" @input=${(e) => (this.newGoal.unit = e.target.value)} />
           <label>Target</label>
-          <input
-            type="number"
-            @input=${(e) => (this.newGoal.target = Number(e.target.value))}
-          />
+          <input type="number" @input=${(e) => (this.newGoal.target = Number(e.target.value))} />
           <label>End Date</label>
-          <input
-            type="date"
-            @input=${(e) => (this.newGoal.end = e.target.value)}
-          />
+          <input type="date" @input=${(e) => (this.newGoal.end = e.target.value)} />
           <label>Days/Week</label>
-          <input
-            type="number"
-            @input=${(e) => (this.newGoal.daysPerWeek = Number(e.target.value))}
-          />
+          <input type="number" @input=${(e) => (this.newGoal.daysPerWeek = Number(e.target.value))} />
           <button @click=${this._saveGoal}>Save</button>
+          <button style="background-color: gray;" @click=${this._closeAddModal}>Cancel</button>
         </div>
       </div>
     `;
   }
 
+  _renderDeleteModal() {
+    return html`
+      <div class="modal" @click=${this._cancelRemove}>
+        <div class="modal-content" @click=${(e) => e.stopPropagation()}>
+          <h2>Delete Goal</h2>
+          <p>Are you sure you want to delete "${this.confirmingDelete.name}"?</p>
+          <button style="background-color: red;" @click=${() => this._removeGoalImmediately(this.confirmingDelete)}>Delete</button>
+          <button @click=${this._cancelRemove}>Cancel</button>
+        </div>
+      </div>
+    `;
+  }
+  //#endregion
+
+  //#region ===== Modal Control =====
   _openAddModal() {
     this.newGoal = {
       name: "",
@@ -251,7 +247,7 @@ class GoalTrackerCard extends LitElement {
       target: 0,
       end: "",
       daysPerWeek: 5,
-      start: new Date().toISOString().split("T")[0], // today
+      start: new Date().toISOString().split("T")[0],
       progress: 0,
     };
     this.showModal = true;
@@ -260,34 +256,12 @@ class GoalTrackerCard extends LitElement {
   _closeAddModal() {
     this.showModal = false;
   }
+  //#endregion
 
-  _renderDeleteModal() {
-    return html`
-      <div class="modal" @click=${this._cancelRemove}>
-        <div class="modal-content" @click=${(e) => e.stopPropagation()}>
-          <h2>Delete Goal</h2>
-          <p>
-            Are you sure you want to delete "${this.confirmingDelete.name}"?
-          </p>
-          <button
-            style="background-color: red;"
-            @click=${() => this._removeGoal(this.confirmingDelete)}
-          >
-            Delete
-          </button>
-          <button @click=${this._cancelRemove}>Cancel</button>
-        </div>
-      </div>
-    `;
-  }
-
+  //#region ===== Goal Management =====
   _saveGoal() {
     this.goals = [...this.goals, { ...this.newGoal }];
     this.showModal = false;
-  }
-
-  _removeGoal(goalToRemove) {
-    this.goals = this.goals.filter((goal) => goal !== goalToRemove);
   }
 
   _confirmRemove(goal) {
@@ -298,11 +272,13 @@ class GoalTrackerCard extends LitElement {
     this.confirmingDelete = null;
   }
 
-  _removeGoal(goalToRemove) {
+  _removeGoalImmediately(goalToRemove) {
     this.goals = this.goals.filter((goal) => goal !== goalToRemove);
     this.confirmingDelete = null;
   }
+  //#endregion
 
+  //#region ===== Utilities =====
   _calculateWorkingDays(startDate, endDate, daysPerWeek) {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -313,10 +289,11 @@ class GoalTrackerCard extends LitElement {
   getCardSize() {
     return 3 + this.goals.length;
   }
+  //#endregion
 
+  //#region ===== Debug/Test Data =====
   _addTestGoals() {
     const today = new Date().toISOString().split("T")[0];
-
     const testGoals = [
       {
         name: "_TEST_ Run",
@@ -337,13 +314,16 @@ class GoalTrackerCard extends LitElement {
         daysPerWeek: 5,
       },
     ];
-
     this.goals = [...this.goals, ...testGoals];
   }
 
   _removeTestGoals() {
     this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
   }
+  //#endregion
 }
+//#endregion
 
+//#region ===== Registration =====
 customElements.define("goal-tracker-card", GoalTrackerCard);
+//#endregion
