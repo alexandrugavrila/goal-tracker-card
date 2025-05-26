@@ -1,0 +1,11 @@
+services:
+  homeassistant:
+    container_name: homeassistant-goal-tracker-card-dev
+    image: homeassistant/home-assistant:stable
+    ports:
+      - "8124:8123"  # Map container port 8123 to host port 8124
+    volumes:
+      - ./config:/config
+    environment:
+      - TZ=America/New_York
+    restart: unless-stopped

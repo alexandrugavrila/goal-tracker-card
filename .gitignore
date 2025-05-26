@@ -4,6 +4,12 @@
 *.sqlite
 __pycache__/
 
+dev_instance/config/.storage
+dev_instance/config/blueprints
+dev_instance/config/tts
+dev_instance/config/.HA_VERSION
+dev_instance/config/home-assistant.*
+
 # Node / Lit Dev (optional)
 node_modules/
 dist/
