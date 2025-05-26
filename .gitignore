@@ -1,0 +1,15 @@
+# Ignore Home Assistant files
+*.db
+*.log
+*.sqlite
+__pycache__/
+
+# Node / Lit Dev (optional)
+node_modules/
+dist/
+.env
+.vscode/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+{
+  "name": "Goal Tracker Card",
+  "description": "A lightweight, customizable progress-tracking card for Home Assistant dashboards.",
+  "version": "0.0.1",
+  "slug": "goal-tracker-card",
+  "type": "lovelace",
+  "resources": [
+    {
+      "url": "goal-tracker-card.js",
+      "type": "module"
+    }
+  ]
+}
