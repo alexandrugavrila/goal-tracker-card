@@ -147,7 +147,7 @@ class GoalTrackerCard extends LitElement {
   setConfig(config) {
     this.config = config || {};
 
-    const savedGoals = this._getGoalsFromStorage();
+    const savedGoals = this._getGoalsFromState();
     const configGoals = this.config.goals || [];
     this.goals = [...configGoals, ...savedGoals]; // Add saved goals
   }
@@ -166,6 +166,14 @@ class GoalTrackerCard extends LitElement {
       ${this.showModal ? this._renderAddModal() : ""}
       ${this.confirmingDelete ? this._renderDeleteModal() : ""}
     `;
+  }
+
+  updated(changed) {
+    if (changed.has("hass") && this.hass && this.goals.length === 0) {
+      const saved = this._getGoalsFromState();
+      const configGoals = this.config?.goals || [];
+      this.goals = [...configGoals, ...saved];
+    }
   }
 
   _renderGoal(goal) {
@@ -301,51 +309,55 @@ class GoalTrackerCard extends LitElement {
   _saveGoal() {
     this.goals = [...this.goals, { ...this.newGoal }];
     this.showModal = false;
-    this._saveGoalsToStorage();
+    this._saveGoalsToState();
   }
 
   _confirmRemove(goal) {
     this.confirmingDelete = goal;
-    this._saveGoalsToStorage();
+    this._saveGoalsToState();
   }
 
   _cancelRemove() {
     this.confirmingDelete = null;
-    this._saveGoalsToStorage();
+    this._saveGoalsToState();
   }
 
   _removeGoalImmediately(goalToRemove) {
     this.goals = this.goals.filter((goal) => goal !== goalToRemove);
     this.confirmingDelete = null;
-    this._saveGoalsToStorage();
+    this._saveGoalsToState();
   }
   //#endregion
 
   //#region ===== Storage =====
-  _saveGoalsToStorage() {
+  async _saveGoalsToState() {
+    if (!this.hass) return;
     try {
-      console.log("Saving goals to localStorage:", this.goals);
-      localStorage.setItem(
-        "goal-tracker-card__goals",
-        JSON.stringify(this.goals)
-      );
+      const value = JSON.stringify(this.goals);
+      await this.hass.callService("input_text", "set_value", {
+        entity_id: "input_text.goal_tracker_data",
+        value,
+      });
+      console.log("Saved goals to Home Assistant input_text");
     } catch (e) {
-      console.warn("Failed to save goals:", e);
+      console.warn("Failed to save goals to input_text:", e);
     }
   }
 
-  _getGoalsFromStorage() {
+  _getGoalsFromState() {
+    if (!this.hass) return [];
     try {
-      const data = localStorage.getItem("goal-tracker-card__goals");
-      if (data) {
-        const parsed = JSON.parse(data);
+      const entity = this.hass.states["input_text.goal_tracker_data"];
+      if (entity && entity.state) {
+        const parsed = JSON.parse(entity.state);
         if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
-      console.warn("Failed to load goals from localStorage:", e);
+      console.warn("Failed to parse goals from input_text:", e);
     }
     return [];
   }
+  //#endregion
 
   //#region ===== Utilities =====
   _calculateWorkingDays(startDate, endDate, daysPerWeek) {
@@ -384,12 +396,12 @@ class GoalTrackerCard extends LitElement {
       },
     ];
     this.goals = [...this.goals, ...testGoals];
-    this._saveGoalsToStorage();
+    this._saveGoalsToState();
   }
 
   _removeTestGoals() {
     this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
-    this._saveGoalsToStorage();
+    this._saveGoalsToState();
   }
   //#endregion
 }
