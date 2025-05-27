@@ -146,7 +146,10 @@ class GoalTrackerCard extends LitElement {
 
   setConfig(config) {
     this.config = config || {};
-    this.goals = this.config.goals || [];
+
+    const savedGoals = this._getGoalsFromStorage();
+    const configGoals = this.config.goals || [];
+    this.goals = [...configGoals, ...savedGoals]; // Add saved goals
   }
   //#endregion
 
@@ -166,7 +169,11 @@ class GoalTrackerCard extends LitElement {
   }
 
   _renderGoal(goal) {
-    const totalDays = this._calculateWorkingDays(goal.start, goal.end, goal.daysPerWeek);
+    const totalDays = this._calculateWorkingDays(
+      goal.start,
+      goal.end,
+      goal.daysPerWeek
+    );
     const progressPercent = Math.min((goal.progress / goal.target) * 100, 100);
     const daysDone = Math.round((goal.progress / goal.target) * totalDays);
 
@@ -176,14 +183,22 @@ class GoalTrackerCard extends LitElement {
           <div class="goal-title">
             ${goal.name} (${goal.progress}/${goal.target} ${goal.unit})
           </div>
-          <button class="delete-button" title="Remove goal" @click=${() => this._confirmRemove(goal)}>🗑️</button>
+          <button
+            class="delete-button"
+            title="Remove goal"
+            @click=${() => this._confirmRemove(goal)}
+          >
+            🗑️
+          </button>
         </div>
 
         ${this.confirmingDelete === goal
           ? html`
               <div class="confirm-delete">
                 <em>Are you sure?</em>
-                <button @click=${() => this._removeGoalImmediately(goal)}>Yes</button>
+                <button @click=${() => this._removeGoalImmediately(goal)}>
+                  Yes
+                </button>
                 <button @click=${this._cancelRemove}>No</button>
               </div>
             `
@@ -209,17 +224,34 @@ class GoalTrackerCard extends LitElement {
         <div class="modal-content" @click=${(e) => e.stopPropagation()}>
           <h2>New Goal</h2>
           <label>Name</label>
-          <input type="text" @input=${(e) => (this.newGoal.name = e.target.value)} />
+          <input
+            type="text"
+            @input=${(e) => (this.newGoal.name = e.target.value)}
+          />
           <label>Unit</label>
-          <input type="text" @input=${(e) => (this.newGoal.unit = e.target.value)} />
+          <input
+            type="text"
+            @input=${(e) => (this.newGoal.unit = e.target.value)}
+          />
           <label>Target</label>
-          <input type="number" @input=${(e) => (this.newGoal.target = Number(e.target.value))} />
+          <input
+            type="number"
+            @input=${(e) => (this.newGoal.target = Number(e.target.value))}
+          />
           <label>End Date</label>
-          <input type="date" @input=${(e) => (this.newGoal.end = e.target.value)} />
+          <input
+            type="date"
+            @input=${(e) => (this.newGoal.end = e.target.value)}
+          />
           <label>Days/Week</label>
-          <input type="number" @input=${(e) => (this.newGoal.daysPerWeek = Number(e.target.value))} />
+          <input
+            type="number"
+            @input=${(e) => (this.newGoal.daysPerWeek = Number(e.target.value))}
+          />
           <button @click=${this._saveGoal}>Save</button>
-          <button style="background-color: gray;" @click=${this._closeAddModal}>Cancel</button>
+          <button style="background-color: gray;" @click=${this._closeAddModal}>
+            Cancel
+          </button>
         </div>
       </div>
     `;
@@ -230,8 +262,15 @@ class GoalTrackerCard extends LitElement {
       <div class="modal" @click=${this._cancelRemove}>
         <div class="modal-content" @click=${(e) => e.stopPropagation()}>
           <h2>Delete Goal</h2>
-          <p>Are you sure you want to delete "${this.confirmingDelete.name}"?</p>
-          <button style="background-color: red;" @click=${() => this._removeGoalImmediately(this.confirmingDelete)}>Delete</button>
+          <p>
+            Are you sure you want to delete "${this.confirmingDelete.name}"?
+          </p>
+          <button
+            style="background-color: red;"
+            @click=${() => this._removeGoalImmediately(this.confirmingDelete)}
+          >
+            Delete
+          </button>
           <button @click=${this._cancelRemove}>Cancel</button>
         </div>
       </div>
@@ -262,21 +301,51 @@ class GoalTrackerCard extends LitElement {
   _saveGoal() {
     this.goals = [...this.goals, { ...this.newGoal }];
     this.showModal = false;
+    this._saveGoalsToStorage();
   }
 
   _confirmRemove(goal) {
     this.confirmingDelete = goal;
+    this._saveGoalsToStorage();
   }
 
   _cancelRemove() {
     this.confirmingDelete = null;
+    this._saveGoalsToStorage();
   }
 
   _removeGoalImmediately(goalToRemove) {
     this.goals = this.goals.filter((goal) => goal !== goalToRemove);
     this.confirmingDelete = null;
+    this._saveGoalsToStorage();
   }
   //#endregion
+
+  //#region ===== Storage =====
+  _saveGoalsToStorage() {
+    try {
+      console.log("Saving goals to localStorage:", this.goals);
+      localStorage.setItem(
+        "goal-tracker-card__goals",
+        JSON.stringify(this.goals)
+      );
+    } catch (e) {
+      console.warn("Failed to save goals:", e);
+    }
+  }
+
+  _getGoalsFromStorage() {
+    try {
+      const data = localStorage.getItem("goal-tracker-card__goals");
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn("Failed to load goals from localStorage:", e);
+    }
+    return [];
+  }
 
   //#region ===== Utilities =====
   _calculateWorkingDays(startDate, endDate, daysPerWeek) {
@@ -315,10 +384,12 @@ class GoalTrackerCard extends LitElement {
       },
     ];
     this.goals = [...this.goals, ...testGoals];
+    this._saveGoalsToStorage();
   }
 
   _removeTestGoals() {
     this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
+    this._saveGoalsToStorage();
   }
   //#endregion
 }
