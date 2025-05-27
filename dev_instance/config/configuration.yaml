@@ -18,3 +18,8 @@ lovelace:
   resources:
     - url: /local/custom-cards/goal-tracker-card.js
       type: module
+
+input_text:
+  goal_tracker_data:
+    name: Goal Tracker Data
+    max: 32768
