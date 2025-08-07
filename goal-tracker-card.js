@@ -11,7 +11,8 @@ class GoalTrackerCard extends LitElement {
     goals: { state: true },
     showModal: { state: true },
     newGoal: { state: true },
-    confirmingDelete: { state: true },
+    confirmingDeleteId: { state: true },
+    progressEditingGoal: { state: true },
   };
   //#endregion
 
@@ -32,12 +33,18 @@ class GoalTrackerCard extends LitElement {
     .goal-header {
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-start;
       margin-bottom: 6px;
     }
 
     .goal-title {
       font-weight: bold;
+      flex: 1;
+    }
+
+    .goal-actions {
+      display: flex;
+      gap: 6px;
     }
 
     .goal-bar {
@@ -79,17 +86,36 @@ class GoalTrackerCard extends LitElement {
       background-color: #2980b9;
     }
 
+    .set-button,
+    .adjust-button {
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: #333;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background-color: #e6e6e6;
+    }
+
+    .set-button:hover,
+    .adjust-button:hover {
+      background-color: #ccc;
+    }
+
     .delete-button {
       background: none;
       border: none;
       font-size: 18px;
       cursor: pointer;
       color: #b00;
-      padding: 0;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background-color: #f3d6d6;
     }
 
     .delete-button:hover {
-      color: #f00;
+      background-color: #f8bcbc;
     }
 
     .modal {
@@ -140,30 +166,32 @@ class GoalTrackerCard extends LitElement {
     this.goals = [];
     this.showModal = false;
     this.newGoal = {};
-    this.confirmingDelete = null;
+    this.confirmingDeleteId = null;
+    this.progressEditingGoal = null;
   }
 
   setConfig(config) {
     this.config = config || {};
-
     const savedGoals = this._getGoalsFromState();
     const configGoals = this.config.goals || [];
-    this.goals = [...configGoals, ...savedGoals]; // Add saved goals
+    this.goals = [...configGoals, ...savedGoals];
   }
   //#endregion
 
   //#region ===== Lifecycle and Rendering =====
   render() {
     return html`
-      <div class="goal-list">
-        ${this.goals.map((goal) => this._renderGoal(goal))}
-      </div>
-      <button @click=${this._openAddModal}>+ Add Goal</button>
-      <button @click=${this._addTestGoals}>Add Test Data</button>
-      <button @click=${this._removeTestGoals}>Remove Test Data</button>
-
-      ${this.showModal ? this._renderAddModal() : ""}
-      ${this.confirmingDelete ? this._renderDeleteModal() : ""}
+      <ha-card>
+        <div class="goal-list">
+          ${this.goals.map((goal) => this._renderGoal(goal))}
+        </div>
+        <button @click=${this._openAddModal}>+ Add Goal</button>
+        <button @click=${this._addTestGoals}>Add Test Data</button>
+        <button @click=${this._removeTestGoals}>Remove Test Data</button>
+        ${this.showModal ? this._renderAddModal() : ""}
+        ${this.confirmingDeleteId ? this._renderDeleteModal() : ""}
+        ${this.progressEditingGoal ? this._renderSetProgressModal() : ""}
+      </ha-card>
     `;
   }
 
@@ -190,20 +218,19 @@ class GoalTrackerCard extends LitElement {
           <div class="goal-title">
             ${goal.name} (${goal.progress}/${goal.target} ${goal.unit})
           </div>
-          <button
-            class="delete-button"
-            title="Remove goal"
-            @click=${() => this._confirmRemove(goal)}
-          >
-            🗑️
-          </button>
+          <div class="goal-actions">
+            <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, -1)}>-1</button>
+            <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, 1)}>+1</button>
+            <button class="set-button" @click=${() => this._openSetProgressModal(goal)}>Set</button>
+            <button class="delete-button" @click=${() => this._confirmRemove(goal.id)}>🗑️</button>
+          </div>
         </div>
 
-        ${this.confirmingDelete === goal
+        ${this.confirmingDeleteId === goal.id
           ? html`
               <div class="confirm-delete">
                 <em>Are you sure?</em>
-                <button @click=${() => this._removeGoalImmediately(goal)}>
+                <button @click=${() => this._removeGoalImmediately(goal.id)}>
                   Yes
                 </button>
                 <button @click=${this._cancelRemove}>No</button>
@@ -224,6 +251,7 @@ class GoalTrackerCard extends LitElement {
             return html`<div class="day" style="background:${color}"></div>`;
           })}
         </div>
+      </div>
     `;
   }
 
@@ -267,20 +295,44 @@ class GoalTrackerCard extends LitElement {
   }
 
   _renderDeleteModal() {
+    const goal = this.goals.find((g) => g.id === this.confirmingDeleteId);
     return html`
       <div class="modal" @click=${this._cancelRemove}>
         <div class="modal-content" @click=${(e) => e.stopPropagation()}>
           <h2>Delete Goal</h2>
-          <p>
-            Are you sure you want to delete "${this.confirmingDelete.name}"?
-          </p>
+          <p>Are you sure you want to delete "${goal?.name}"?</p>
           <button
             style="background-color: red;"
-            @click=${() => this._removeGoalImmediately(this.confirmingDelete)}
+            @click=${() => this._removeGoalImmediately(goal.id)}
           >
             Delete
           </button>
           <button @click=${this._cancelRemove}>Cancel</button>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderSetProgressModal() {
+    return html`
+      <div class="modal" @click=${this._closeSetProgressModal}>
+        <div class="modal-content" @click=${(e) => e.stopPropagation()}>
+          <h2>Set Progress</h2>
+          <p>${this.progressEditingGoal.name}</p>
+          <label>Progress (${this.progressEditingGoal.unit})</label>
+          <input
+            type="number"
+            .value=${this.progressEditingGoal.progress}
+            @input=${(e) =>
+              (this.progressEditingGoal.progress = Number(e.target.value))}
+          />
+          <button @click=${this._saveProgress}>Save</button>
+          <button
+            style="background-color: gray;"
+            @click=${this._closeSetProgressModal}
+          >
+            Cancel
+          </button>
         </div>
       </div>
     `;
@@ -290,6 +342,7 @@ class GoalTrackerCard extends LitElement {
   //#region ===== Modal Control =====
   _openAddModal() {
     this.newGoal = {
+      id: crypto.randomUUID(),
       name: "",
       unit: "",
       target: 0,
@@ -304,6 +357,14 @@ class GoalTrackerCard extends LitElement {
   _closeAddModal() {
     this.showModal = false;
   }
+
+  _openSetProgressModal(goal) {
+    this.progressEditingGoal = { ...goal };
+  }
+
+  _closeSetProgressModal() {
+    this.progressEditingGoal = null;
+  }
   //#endregion
 
   //#region ===== Goal Management =====
@@ -313,19 +374,43 @@ class GoalTrackerCard extends LitElement {
     this._saveGoalsToState();
   }
 
-  _confirmRemove(goal) {
-    this.confirmingDelete = goal;
+  _confirmRemove(goalId) {
+    this.confirmingDeleteId = goalId;
     this._saveGoalsToState();
   }
 
   _cancelRemove() {
-    this.confirmingDelete = null;
+    this.confirmingDeleteId = null;
     this._saveGoalsToState();
   }
 
-  _removeGoalImmediately(goalToRemove) {
-    this.goals = this.goals.filter((goal) => goal !== goalToRemove);
-    this.confirmingDelete = null;
+  _removeGoalImmediately(goalId) {
+    this.goals = this.goals.filter((goal) => goal.id !== goalId);
+    this.confirmingDeleteId = null;
+    this._saveGoalsToState();
+  }
+
+  _saveProgress() {
+    this.goals = this.goals.map((goal) =>
+      goal.id === this.progressEditingGoal.id
+        ? { ...this.progressEditingGoal }
+        : goal
+    );
+    this._saveGoalsToState();
+    this._closeSetProgressModal();
+  }
+
+  _incrementProgress(goalId, delta) {
+    this.goals = this.goals.map((goal) => {
+      if (goal.id === goalId) {
+        const newProgress = Math.max(0, Math.min(goal.target, goal.progress + delta));
+        return {
+          ...goal,
+          progress: newProgress,
+        };
+      }
+      return goal;
+    });
     this._saveGoalsToState();
   }
   //#endregion
@@ -339,7 +424,6 @@ class GoalTrackerCard extends LitElement {
         entity_id: "input_text.goal_tracker_data",
         value,
       });
-      console.log("Saved goals to Home Assistant input_text");
     } catch (e) {
       console.warn("Failed to save goals to input_text:", e);
     }
@@ -378,7 +462,9 @@ class GoalTrackerCard extends LitElement {
     const today = new Date();
     const todayStr = today.toISOString().split("T")[0];
 
-    // Generate end dates 30 and 60 days in the future
+    const start = new Date(today);
+    start.setDate(start.getDate() - 15);
+
     const runEnd = new Date(today);
     runEnd.setDate(runEnd.getDate() + 30);
     const runEndStr = runEnd.toISOString().split("T")[0];
@@ -389,6 +475,7 @@ class GoalTrackerCard extends LitElement {
 
     const testGoals = [
       {
+        id: crypto.randomUUID(),
         name: "_TEST_ Run",
         unit: "km",
         target: 50,
@@ -398,6 +485,7 @@ class GoalTrackerCard extends LitElement {
         daysPerWeek: 4,
       },
       {
+        id: crypto.randomUUID(),
         name: "_TEST_ Read",
         unit: "pages",
         target: 300,
