@@ -374,15 +374,26 @@ class GoalTrackerCard extends LitElement {
 
   //#region ===== Debug/Test Data =====
   _addTestGoals() {
-    const today = new Date().toISOString().split("T")[0];
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
+
+    // Generate end dates 30 and 60 days in the future
+    const runEnd = new Date(today);
+    runEnd.setDate(runEnd.getDate() + 30);
+    const runEndStr = runEnd.toISOString().split("T")[0];
+
+    const readEnd = new Date(today);
+    readEnd.setDate(readEnd.getDate() + 60);
+    const readEndStr = readEnd.toISOString().split("T")[0];
+
     const testGoals = [
       {
         name: "_TEST_ Run",
         unit: "km",
         target: 50,
         progress: 15,
-        start: today,
-        end: "2025-06-30",
+        start: todayStr,
+        end: runEndStr,
         daysPerWeek: 4,
       },
       {
@@ -390,14 +401,16 @@ class GoalTrackerCard extends LitElement {
         unit: "pages",
         target: 300,
         progress: 120,
-        start: today,
-        end: "2025-07-15",
+        start: todayStr,
+        end: readEndStr,
         daysPerWeek: 5,
       },
     ];
+
     this.goals = [...this.goals, ...testGoals];
     this._saveGoalsToState();
   }
+
 
   _removeTestGoals() {
     this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
