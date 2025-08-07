@@ -13,6 +13,8 @@ class GoalTrackerCard extends LitElement {
     newGoal: { state: true },
     confirmingDeleteId: { state: true },
     progressEditingGoal: { state: true },
+    dailyEdit: { state: true },
+    showDailyModal: { state: true },
   };
   //#endregion
 
@@ -59,17 +61,28 @@ class GoalTrackerCard extends LitElement {
       height: 100%;
       background: linear-gradient(to right, #2ecc71, #27ae60);
     }
+    .progress-marker {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background-color: #000000ff;
+      z-index: 2;
+    }
 
     .day-indicators {
       display: grid;
       gap: 5px;
       margin-top: 8px;
     }
-
     .day {
       height: 20px;
       background: #eee;
       border-radius: 4px;
+    }
+    .day.today {
+      outline: 2px solid #000;
+      outline-offset: 1px;
     }
 
     button {
@@ -81,7 +94,6 @@ class GoalTrackerCard extends LitElement {
       color: white;
       cursor: pointer;
     }
-
     button:hover {
       background-color: #2980b9;
     }
@@ -168,6 +180,12 @@ class GoalTrackerCard extends LitElement {
     this.newGoal = {};
     this.confirmingDeleteId = null;
     this.progressEditingGoal = null;
+    this.dailyEdit = {
+      goalId: null,
+      index: 0,
+      value: 0,
+    };
+    this.showDailyModal = false;
   }
 
   setConfig(config) {
@@ -191,6 +209,7 @@ class GoalTrackerCard extends LitElement {
         ${this.showModal ? this._renderAddModal() : ""}
         ${this.confirmingDeleteId ? this._renderDeleteModal() : ""}
         ${this.progressEditingGoal ? this._renderSetProgressModal() : ""}
+        ${this.showDailyModal ? this._renderDailyModal() : ""}
       </ha-card>
     `;
   }
@@ -204,13 +223,8 @@ class GoalTrackerCard extends LitElement {
   }
 
   _renderGoal(goal) {
-    const totalDays = this._calculateWorkingDays(
-      goal.start,
-      goal.end,
-      goal.daysPerWeek
-    );
+    const totalDays = goal.daily?.length || 0;
     const progressPercent = Math.min((goal.progress / goal.target) * 100, 100);
-    const daysDone = Math.round((goal.progress / goal.target) * totalDays);
 
     return html`
       <div class="goal-row">
@@ -219,10 +233,30 @@ class GoalTrackerCard extends LitElement {
             ${goal.name} (${goal.progress}/${goal.target} ${goal.unit})
           </div>
           <div class="goal-actions">
-            <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, -1)}>-1</button>
-            <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, 1)}>+1</button>
-            <button class="set-button" @click=${() => this._openSetProgressModal(goal)}>Set</button>
-            <button class="delete-button" @click=${() => this._confirmRemove(goal.id)}>🗑️</button>
+            <button
+              class="adjust-button"
+              @click=${() => this._incrementProgress(goal.id, -1)}
+            >
+              -1
+            </button>
+            <button
+              class="adjust-button"
+              @click=${() => this._incrementProgress(goal.id, 1)}
+            >
+              +1
+            </button>
+            <button
+              class="set-button"
+              @click=${() => this._openSetProgressModal(goal)}
+            >
+              Set
+            </button>
+            <button
+              class="delete-button"
+              @click=${() => this._confirmRemove(goal.id)}
+            >
+              🗑️
+            </button>
           </div>
         </div>
 
@@ -240,6 +274,11 @@ class GoalTrackerCard extends LitElement {
 
         <div class="goal-bar">
           <div class="progress-fill" style="width: ${progressPercent}%;"></div>
+          <div
+            class="progress-marker"
+            style="left: ${this._getExpectedProgressPercent(goal)}%;"
+            title="Expected progress by today"
+          ></div>
         </div>
 
         <div
@@ -247,8 +286,21 @@ class GoalTrackerCard extends LitElement {
           style="grid-template-columns: repeat(${Math.max(totalDays, 1)}, 1fr);"
         >
           ${Array.from({ length: Math.max(0, totalDays) }, (_, i) => {
-            const color = i < daysDone ? "green" : "#eee";
-            return html`<div class="day" style="background:${color}"></div>`;
+            const value = goal.daily?.[i] ?? 0;
+            const color = this._getDayColor(goal, i);
+            const tooltip = `${value} ${goal.unit}`;
+            const isToday =
+              new Date().setHours(0, 0, 0, 0) ===
+              new Date(goal.start).setHours(0, 0, 0, 0) + i * 86400000;
+
+            return html`
+              <div
+                class="day ${isToday ? "today" : ""}"
+                style="background:${color}; cursor: pointer;"
+                title="${tooltip}"
+                @click=${() => this._openDailyModal(goal.id, i)}
+              ></div>
+            `;
           })}
         </div>
       </div>
@@ -274,6 +326,11 @@ class GoalTrackerCard extends LitElement {
           <input
             type="number"
             @input=${(e) => (this.newGoal.target = Number(e.target.value))}
+          />
+          <label>Starting Progress</label>
+          <input
+            type="number"
+            @input=${(e) => (this.newGoal.progress = Number(e.target.value))}
           />
           <label>End Date</label>
           <input
@@ -337,6 +394,51 @@ class GoalTrackerCard extends LitElement {
       </div>
     `;
   }
+
+  _renderDailyModal() {
+    const goal = this.goals.find((g) => g.id === this.dailyEdit.goalId);
+    if (!goal) return;
+
+    const date = new Date(goal.start);
+    date.setDate(date.getDate() + this.dailyEdit.index);
+    const dateStr = date.toISOString().split("T")[0];
+    const unit = goal.unit;
+
+    return html`
+      <div class="modal" @click=${this._closeDailyModal}>
+        <div class="modal-content" @click=${(e) => e.stopPropagation()}>
+          <h2>Edit Daily Progress</h2>
+          <p>${goal.name} — <strong>${dateStr}</strong></p>
+          <label>Progress (${unit})</label>
+          <input
+            type="number"
+            .value=${this.dailyEdit.value}
+            @input=${(e) =>
+              (this.dailyEdit = {
+                ...this.dailyEdit,
+                value: Number(e.target.value),
+              })}
+          />
+          <div
+            style="display: flex; justify-content: space-between; margin-top: 12px;"
+          >
+            <button @click=${this._prevDay}>← Previous</button>
+            <button @click=${this._setToday}>Today</button>
+            <button @click=${this._nextDay}>Next →</button>
+          </div>
+          <button style="margin-top: 12px;" @click=${this._saveDailyValue}>
+            Save
+          </button>
+          <button
+            style="background-color: gray;"
+            @click=${this._closeDailyModal}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    `;
+  }
   //#endregion
 
   //#region ===== Modal Control =====
@@ -346,10 +448,10 @@ class GoalTrackerCard extends LitElement {
       name: "",
       unit: "",
       target: 0,
+      progress: 0,
       end: "",
       daysPerWeek: 5,
       start: new Date().toISOString().split("T")[0],
-      progress: 0,
     };
     this.showModal = true;
   }
@@ -365,11 +467,31 @@ class GoalTrackerCard extends LitElement {
   _closeSetProgressModal() {
     this.progressEditingGoal = null;
   }
+
+  _openDailyModal(goalId, index) {
+    const goal = this.goals.find((g) => g.id === goalId);
+    if (!goal) return;
+
+    this.dailyEdit = {
+      goalId,
+      index,
+      value: goal.daily?.[index] ?? 0,
+    };
+    this.showDailyModal = true;
+  }
+
+  _closeDailyModal() {
+    this.showDailyModal = false;
+  }
   //#endregion
 
   //#region ===== Goal Management =====
   _saveGoal() {
-    this.goals = [...this.goals, { ...this.newGoal }];
+    const newGoal = {
+      ...this.newGoal,
+      daily: this._generateDailyArray(this.newGoal.start, this.newGoal.end),
+    };
+    this.goals = [...this.goals, newGoal];
     this.showModal = false;
     this._saveGoalsToState();
   }
@@ -403,7 +525,10 @@ class GoalTrackerCard extends LitElement {
   _incrementProgress(goalId, delta) {
     this.goals = this.goals.map((goal) => {
       if (goal.id === goalId) {
-        const newProgress = Math.max(0, Math.min(goal.target, goal.progress + delta));
+        const newProgress = Math.max(
+          0,
+          Math.min(goal.target, goal.progress + delta)
+        );
         return {
           ...goal,
           progress: newProgress,
@@ -413,6 +538,77 @@ class GoalTrackerCard extends LitElement {
     });
     this._saveGoalsToState();
   }
+
+  _saveDailyValue() {
+    const { goalId, index, value } = this.dailyEdit;
+    this.goals = this.goals.map((goal) => {
+      if (goal.id === goalId && Array.isArray(goal.daily)) {
+        const updatedDaily = [...goal.daily];
+        const oldValue = updatedDaily[index] ?? 0;
+        const clamped = Math.max(0, value);
+        updatedDaily[index] = clamped;
+
+        const rawProgress = goal.progress + (clamped - oldValue);
+        const boundedProgress = Math.max(0, Math.min(rawProgress, goal.target));
+
+        return {
+          ...goal,
+          daily: updatedDaily,
+          progress: boundedProgress,
+        };
+      }
+      return goal;
+    });
+    this._saveGoalsToState();
+    this._closeDailyModal();
+  }
+
+  _nextDay() {
+    const goal = this.goals.find((g) => g.id === this.dailyEdit.goalId);
+    if (!goal) return;
+    const max = goal.daily.length - 1;
+    const newIndex = Math.min(this.dailyEdit.index + 1, max);
+    this.dailyEdit = {
+      goalId: goal.id,
+      index: newIndex,
+      value: goal.daily[newIndex],
+    };
+  }
+
+  _prevDay() {
+    const newIndex = Math.max(this.dailyEdit.index - 1, 0);
+    const goal = this.goals.find((g) => g.id === this.dailyEdit.goalId);
+    if (!goal) return;
+    this.dailyEdit = {
+      goalId: goal.id,
+      index: newIndex,
+      value: goal.daily[newIndex],
+    };
+  }
+
+  _setToday() {
+    const goal = this.goals.find((g) => g.id === this.dailyEdit.goalId);
+    if (!goal) return;
+
+    const today = new Date().toISOString().split("T")[0];
+    const start = new Date(goal.start);
+    const end = new Date(goal.end);
+    const date = new Date(today);
+
+    if (date < start || date > end) return;
+
+    const index = Math.floor((date - start) / (1000 * 60 * 60 * 24));
+
+    // ✅ Clamp index just in case rounding lands on an edge
+    const safeIndex = Math.min(Math.max(0, index), goal.daily.length - 1);
+
+    this.dailyEdit = {
+      goalId: goal.id,
+      index: safeIndex,
+      value: goal.daily[safeIndex],
+    };
+  }
+
   //#endregion
 
   //#region ===== Storage =====
@@ -452,9 +648,49 @@ class GoalTrackerCard extends LitElement {
     return Math.round((days / 7) * daysPerWeek);
   }
 
-  getCardSize() {
+  _countDaysBetween(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+    return Math.max(days, 0);
+  }
+
+  _generateDailyArray(startDate, endDate) {
+    const length = this._countDaysBetween(startDate, endDate);
+    return new Array(length).fill(0);
+  }
+
+  _getCardSize() {
     return 3 + this.goals.length;
   }
+
+  _getDayColor(goal, index) {
+    const today = new Date().setHours(0, 0, 0, 0);
+    const goalStart = new Date(goal.start).setHours(0, 0, 0, 0);
+    const dayDate = new Date(goalStart + index * 86400000); // ms/day
+    const value = goal.daily?.[index] ?? 0;
+
+    if (dayDate > today) return "#eee"; // future day
+    if (value === 0) return "#e74c3c"; // red
+    const expectedPerDay = goal.target / goal.daily.length;
+    if (value < expectedPerDay) return "#f1c40f"; // yellow
+    return "#2ecc71"; // green
+  }
+
+  _getExpectedProgressPercent(goal) {
+    if (!goal.start || !goal.end || !goal.target) return 0;
+
+    const now = new Date().setHours(0, 0, 0, 0);
+    const start = new Date(goal.start).setHours(0, 0, 0, 0);
+    const end = new Date(goal.end).setHours(0, 0, 0, 0);
+
+    if (now < start) return 0;
+    if (now > end) return 100;
+
+    const elapsedRatio = (now - start) / (end - start);
+    return Math.round(elapsedRatio * 100);
+  }
+
   //#endregion
 
   //#region ===== Debug/Test Data =====
@@ -462,16 +698,42 @@ class GoalTrackerCard extends LitElement {
     const today = new Date();
     const todayStr = today.toISOString().split("T")[0];
 
-    const start = new Date(today);
-    start.setDate(start.getDate() - 15);
+    const runStart = new Date(today);
+    runStart.setDate(runStart.getDate() - 15);
+    const runStartStr = runStart.toISOString().split("T")[0];
 
     const runEnd = new Date(today);
-    runEnd.setDate(runEnd.getDate() + 30);
+    runEnd.setDate(runEnd.getDate() + 15);
     const runEndStr = runEnd.toISOString().split("T")[0];
 
     const readEnd = new Date(today);
-    readEnd.setDate(readEnd.getDate() + 60);
+    readEnd.setDate(readEnd.getDate() + 30);
     const readEndStr = readEnd.toISOString().split("T")[0];
+
+    const runDays = this._countDaysBetween(runStartStr, runEndStr);
+    const readDays = this._countDaysBetween(todayStr, readEndStr);
+
+    const runDaily = this._generateMockDaily(
+      [
+        [0, 0], // red
+        [1, 1], // yellow (partial)
+        [2, 3], // green (complete)
+        [3, 0], // red
+        [4, 2], // green
+      ],
+      runDays
+    );
+
+    const readDaily = this._generateMockDaily(
+      [
+        [0, 10],
+        [1, 10],
+        [2, 0],
+        [3, 10],
+        [4, 5],
+      ],
+      readDays
+    );
 
     const testGoals = [
       {
@@ -479,20 +741,22 @@ class GoalTrackerCard extends LitElement {
         name: "_TEST_ Run",
         unit: "km",
         target: 50,
-        progress: 15,
-        start: todayStr,
+        start: runStartStr,
         end: runEndStr,
         daysPerWeek: 4,
+        daily: runDaily,
+        progress: runDaily.reduce((a, b) => a + b, 0),
       },
       {
         id: crypto.randomUUID(),
         name: "_TEST_ Read",
         unit: "pages",
         target: 300,
-        progress: 120,
         start: todayStr,
         end: readEndStr,
         daysPerWeek: 5,
+        daily: readDaily,
+        progress: readDaily.reduce((a, b) => a + b, 0),
       },
     ];
 
@@ -503,6 +767,14 @@ class GoalTrackerCard extends LitElement {
   _removeTestGoals() {
     this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
     this._saveGoalsToState();
+  }
+
+  _generateMockDaily(values, totalLength) {
+    const arr = new Array(totalLength).fill(0);
+    values.forEach(([index, val]) => {
+      if (index >= 0 && index < totalLength) arr[index] = val;
+    });
+    return arr;
   }
   //#endregion
 }
