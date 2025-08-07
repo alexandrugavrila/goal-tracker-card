@@ -54,13 +54,12 @@ class GoalTrackerCard extends LitElement {
     }
 
     .day-indicators {
-      display: flex;
+      display: grid;
       gap: 5px;
       margin-top: 8px;
     }
 
     .day {
-      width: 20px;
       height: 20px;
       background: #eee;
       border-radius: 4px;
@@ -216,13 +215,15 @@ class GoalTrackerCard extends LitElement {
           <div class="progress-fill" style="width: ${progressPercent}%;"></div>
         </div>
 
-        <div class="day-indicators">
-          ${[...Array(totalDays)].map((_, i) => {
+        <div
+          class="day-indicators"
+          style="grid-template-columns: repeat(${Math.max(totalDays, 1)}, 1fr);"
+        >
+          ${Array.from({ length: Math.max(0, totalDays) }, (_, i) => {
             const color = i < daysDone ? "green" : "#eee";
             return html`<div class="day" style="background:${color}"></div>`;
           })}
         </div>
-      </div>
     `;
   }
 
@@ -374,15 +375,26 @@ class GoalTrackerCard extends LitElement {
 
   //#region ===== Debug/Test Data =====
   _addTestGoals() {
-    const today = new Date().toISOString().split("T")[0];
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
+
+    // Generate end dates 30 and 60 days in the future
+    const runEnd = new Date(today);
+    runEnd.setDate(runEnd.getDate() + 30);
+    const runEndStr = runEnd.toISOString().split("T")[0];
+
+    const readEnd = new Date(today);
+    readEnd.setDate(readEnd.getDate() + 60);
+    const readEndStr = readEnd.toISOString().split("T")[0];
+
     const testGoals = [
       {
         name: "_TEST_ Run",
         unit: "km",
         target: 50,
         progress: 15,
-        start: today,
-        end: "2025-06-30",
+        start: todayStr,
+        end: runEndStr,
         daysPerWeek: 4,
       },
       {
@@ -390,11 +402,12 @@ class GoalTrackerCard extends LitElement {
         unit: "pages",
         target: 300,
         progress: 120,
-        start: today,
-        end: "2025-07-15",
+        start: todayStr,
+        end: readEndStr,
         daysPerWeek: 5,
       },
     ];
+
     this.goals = [...this.goals, ...testGoals];
     this._saveGoalsToState();
   }
