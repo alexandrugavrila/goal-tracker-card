@@ -742,6 +742,8 @@ class GoalTrackerCard extends LitElement {
         unit: "km",
         target: 50,
         start: runStartStr,
+        progress: 15,
+        start: todayStr,
         end: runEndStr,
         daysPerWeek: 4,
         daily: runDaily,
@@ -752,6 +754,7 @@ class GoalTrackerCard extends LitElement {
         name: "_TEST_ Read",
         unit: "pages",
         target: 300,
+        progress: 120,
         start: todayStr,
         end: readEndStr,
         daysPerWeek: 5,
@@ -763,6 +766,7 @@ class GoalTrackerCard extends LitElement {
     this.goals = [...this.goals, ...testGoals];
     this._saveGoalsToState();
   }
+
 
   _removeTestGoals() {
     this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
