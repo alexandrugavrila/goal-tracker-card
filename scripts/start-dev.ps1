@@ -4,7 +4,7 @@ Write-Host "Starting Goal Tracker Dev environment..."
 $base = "$PSScriptRoot\..\dev_instance"
 
 Write-Host ""
-Write-Host "Ensuring goal-tracker-card.js is linked..."
+Write-Host "Ensuring goal-tracker-card.js is copied into the dev instance..."
 & "$PSScriptRoot\link-dev.ps1"
 
 Write-Host ""

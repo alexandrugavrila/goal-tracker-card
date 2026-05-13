@@ -17,9 +17,9 @@ foreach ($folder in $folders) {
     }
 }
 
-# Create symlink to custom card
+# Copy built custom card into the dev instance
 Write-Host ""
-Write-Host "Creating symlink for goal-tracker-card.js..."
+Write-Host "Copying goal-tracker-card.js into the dev instance..."
 & "$PSScriptRoot\link-dev.ps1"
 
 # Start Docker in background

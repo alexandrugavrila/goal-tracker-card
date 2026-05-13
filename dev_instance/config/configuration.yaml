@@ -15,6 +15,10 @@ homeassistant:
       allow_bypass_login: true
     - type: homeassistant
 
+goal_tracker:
+
+frontend:
+
 lovelace:
   mode: yaml
   dashboards:
@@ -25,10 +29,5 @@ lovelace:
       show_in_sidebar: true
       filename: dashboards/home.yaml
   resources:
-    - url: /local/custom-cards/goal-tracker-card.js
+    - url: /goal_tracker_static/goal-tracker-card.js
       type: module
-
-input_text:
-  goal_tracker_data:
-    name: Goal Tracker Data
-    max: 32768

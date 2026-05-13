@@ -15,11 +15,29 @@ if (-not $fullTarget) {
 $linkPath = Join-Path $fullTarget $LinkName
 
 if (Test-Path $linkPath) {
-    Write-Host "Removing existing link at $linkPath"
+    Write-Host "Removing existing dev card file at $linkPath"
     Remove-Item $linkPath -Force
 }
 
-Write-Host "Linking:"
+Write-Host "Copying built card:"
 Write-Host "  Target: $linkPath"
 Write-Host "  Source: $fullSource"
-New-Item -ItemType SymbolicLink -Path $linkPath -Target $fullSource | Out-Null
+Copy-Item -Path $fullSource -Destination $linkPath -Force
+
+$integrationSource = Resolve-Path "custom_components\goal_tracker"
+$integrationTargetRoot = "$PSScriptRoot\..\dev_instance\config\custom_components"
+$integrationTarget = Join-Path $integrationTargetRoot "goal_tracker"
+
+if (-not (Test-Path $integrationTargetRoot)) {
+    New-Item -ItemType Directory -Path $integrationTargetRoot -Force | Out-Null
+}
+
+if (Test-Path $integrationTarget) {
+    Write-Host "Removing existing dev integration at $integrationTarget"
+    Remove-Item -Recurse -Force $integrationTarget
+}
+
+Write-Host "Copying Goal Tracker integration:"
+Write-Host "  Target: $integrationTarget"
+Write-Host "  Source: $integrationSource"
+Copy-Item -Path $integrationSource -Destination $integrationTarget -Recurse -Force

@@ -16,13 +16,22 @@ if (Test-Path $storagePath) {
     Write-Host "No .storage folder found — skipping."
 }
 
-# Step 3: Remove symbolic link for the card
+# Step 3: Remove copied card file
 $linkPath = "$PSScriptRoot\..\dev_instance\config\www\custom-cards\goal-tracker-card.js"
 if (Test-Path $linkPath) {
-    Write-Host "Removing symlink: $linkPath"
+    Write-Host "Removing dev card file: $linkPath"
     Remove-Item -Force $linkPath
 } else {
-    Write-Host "No symlink found — skipping."
+    Write-Host "No dev card file found — skipping."
+}
+
+# Step 3b: Remove copied custom integration
+$integrationPath = "$PSScriptRoot\..\dev_instance\config\custom_components\goal_tracker"
+if (Test-Path $integrationPath) {
+    Write-Host "Removing dev integration: $integrationPath"
+    Remove-Item -Recurse -Force $integrationPath
+} else {
+    Write-Host "No dev integration found — skipping."
 }
 
 # Step 4: Remove .HA_VERSION

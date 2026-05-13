@@ -1,0 +1,47 @@
+create_goal:
+  name: Create goal
+  description: Create or replace a goal in Goal Tracker storage.
+  fields:
+    goal:
+      required: true
+      selector:
+        object:
+update_goal:
+  name: Update goal
+  description: Create or replace a goal in Goal Tracker storage.
+  fields:
+    goal:
+      required: true
+      selector:
+        object:
+delete_goal:
+  name: Delete goal
+  description: Delete a goal by id.
+  fields:
+    goal_id:
+      required: true
+      selector:
+        text:
+set_daily_value:
+  name: Set daily value
+  description: Set one daily progress value for a goal.
+  fields:
+    goal_id:
+      required: true
+      selector:
+        text:
+    index:
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+    value:
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+clear_goals:
+  name: Clear goals
+  description: Remove all goals from Goal Tracker storage.

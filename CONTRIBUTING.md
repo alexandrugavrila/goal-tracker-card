@@ -37,12 +37,15 @@ The start script also opens this URL automatically. If the page loads before Hom
 
 The dev instance uses trusted-network auth bypass. If Home Assistant still shows onboarding because local state was wiped, complete onboarding once, then use `.\scripts\start-dev.ps1` for normal development.
 
+The dev configuration loads the `goal_tracker` integration from `dev_instance\config\custom_components\goal_tracker`. Goal data is saved in Home Assistant `.storage`.
+
 ## Updating After Code Changes
 
-Edit source files under `src/`, then rebuild:
+Edit frontend files under `src/` or integration files under `custom_components/goal_tracker`, then rebuild and sync the dev instance:
 
 ```powershell
 npm run build
+.\scripts\link-dev.ps1
 ```
 
 Refresh the Home Assistant dashboard:

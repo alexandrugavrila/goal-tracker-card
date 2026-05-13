@@ -1,11 +1,13 @@
 {
   "name": "goal-tracker-card",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "rollup -c",
-    "test": "vitest run"
+    "test": "vitest run && python -m unittest discover -s tests_backend",
+    "test:frontend": "vitest run",
+    "test:backend": "python -m unittest discover -s tests_backend"
   },
   "dependencies": {
     "lit": "^3.3.1"

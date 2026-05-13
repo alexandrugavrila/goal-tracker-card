@@ -1,4 +1,4 @@
-export const DEFAULT_STORAGE_ENTITY = "input_text.goal_tracker_data";
+export const DEFAULT_STORAGE_KEY = "goal-tracker-card:goals";
 export const STORAGE_VERSION = 1;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;

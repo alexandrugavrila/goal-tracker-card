@@ -1,78 +1,60 @@
-# Goal Tracker Card for Home Assistant
+# Goal Tracker for Home Assistant
 
-A Lovelace custom card for tracking goals with progress bars and daily status indicators.
+A Home Assistant integration and Lovelace card for tracking goals with progress bars and daily status indicators.
 
 ## Features
 
+- Goal data persisted in Home Assistant `.storage`
+- Lovelace card served by the integration
 - Actual progress with an expected-progress marker
 - Daily progress boxes with editable per-day values
-- Persistent goals stored in a Home Assistant `input_text` helper
-- Optional YAML seed goals
+- Compact summary sensor for automations and dashboards
+- Optional YAML seed goals in the card config
 - Optional debug controls for local test data
 
-## Installation
+## HACS Installation
 
-### HACS
+This repository is packaged as a HACS integration.
 
-Install this repository as a Lovelace card. HACS loads the bundled `goal-tracker-card.js` resource from the repository root.
+1. In HACS, open the three-dot menu and choose **Custom repositories**.
+2. Add this repository URL.
+3. Select repository type **Integration**.
+4. Install **Goal Tracker**.
+5. Restart Home Assistant.
+6. Add **Goal Tracker** from **Settings > Devices & services**.
 
-### Manual
+The integration stores full goal data in Home Assistant `.storage`, not in entity state. No `input_text` helper is required.
 
-Copy the bundled file to your Home Assistant config:
+## Dashboard Configuration
 
-```text
-/config/www/custom-cards/goal-tracker-card.js
+After installing and adding the integration, add the card to a dashboard:
+
+```yaml
+type: custom:goal-tracker-card
+debug: false
 ```
 
-Register it as a Lovelace module resource:
+If your dashboard uses YAML resources, add the integration-served card resource:
 
 ```yaml
 lovelace:
   mode: yaml
   resources:
-    - url: /local/custom-cards/goal-tracker-card.js
+    - url: /goal_tracker_static/goal-tracker-card.js
       type: module
 ```
 
-## Required Storage Helper
+Storage-mode dashboards may get the resource registered automatically by the integration. If the card shows `custom element does not exist`, add the resource above through **Settings > Dashboards > Resources**.
 
-Create an `input_text` helper for persisted goal data:
-
-```yaml
-input_text:
-  goal_tracker_data:
-    name: Goal Tracker Data
-    max: 32768
-```
-
-The card uses `input_text.goal_tracker_data` by default. To use another helper, set `storage_entity`.
-
-## Card Configuration
-
-```yaml
-type: custom:goal-tracker-card
-storage_entity: input_text.goal_tracker_data
-debug: false
-goals:
-  - id: read-2026
-    name: Read
-    unit: pages
-    target: 300
-    progress: 0
-    start: "2026-05-13"
-    end: "2026-06-13"
-    daysPerWeek: 5
-```
-
-### Options
+## Card Options
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `storage_entity` | string | `input_text.goal_tracker_data` | `input_text` helper used to save goals. |
 | `debug` | boolean | `false` | Shows Add/Remove Test Data controls when `true`. |
-| `goals` | array | `[]` | Initial seed goals copied into storage once. |
+| `goals` | array | `[]` | Initial seed goals copied into `.storage` once. |
+| `storage_key` | string | `goal-tracker-card:goals` | Legacy browser storage key used only for one-time migration. |
 
-YAML goals are seed data. After they are copied into storage, user edits are saved to the configured `input_text` helper and the same seed goals are not duplicated on reload.
+YAML goals are seed data. After they are copied into `.storage`, user edits are saved by the backend integration and the same seed goals are not duplicated on reload.
 
 ## Development
 
@@ -84,7 +66,11 @@ npm test
 npm run build
 ```
 
-The build writes the distributable bundle to `goal-tracker-card.js` and also updates the development Home Assistant copy at `dev_instance/config/www/custom-cards/goal-tracker-card.js`.
+The build writes the distributable bundle to:
+
+- `goal-tracker-card.js`
+- `custom_components/goal_tracker/www/goal-tracker-card.js`
+- `dev_instance/config/www/custom-cards/goal-tracker-card.js`
 
 Start the local Home Assistant dev instance without resetting onboarding/auth state:
 

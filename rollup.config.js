@@ -8,6 +8,10 @@ export default {
       format: "es",
     },
     {
+      file: "custom_components/goal_tracker/www/goal-tracker-card.js",
+      format: "es",
+    },
+    {
       file: "dev_instance/config/www/custom-cards/goal-tracker-card.js",
       format: "es",
     },

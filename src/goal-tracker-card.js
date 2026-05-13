@@ -1,8 +1,7 @@
 import { LitElement, html, css } from "lit";
 import {
-  DEFAULT_STORAGE_ENTITY,
+  DEFAULT_STORAGE_KEY,
   addDaysIso,
-  applyConfigSeeds,
   countDaysBetween,
   generateDailyArray,
   getDayColor,
@@ -11,7 +10,6 @@ import {
   isTodayForGoalIndex,
   normalizeGoal,
   parseStoredGoals,
-  serializeStorage,
   todayIso,
   toIsoDate,
 } from "./goal-utils.js";
@@ -28,6 +26,7 @@ class GoalTrackerCard extends LitElement {
     dailyEdit: { state: true },
     showDailyModal: { state: true },
     storageError: { state: true },
+    storageNotice: { state: true },
   };
 
   static styles = css`
@@ -160,6 +159,15 @@ class GoalTrackerCard extends LitElement {
       margin-bottom: 12px;
     }
 
+    .notice {
+      border: 1px solid #b7791f;
+      background: #fff8e1;
+      color: #6b4e00;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
     .empty {
       color: var(--secondary-text-color, #666);
       margin: 0 0 12px;
@@ -226,24 +234,28 @@ class GoalTrackerCard extends LitElement {
     };
     this.showDailyModal = false;
     this.storageError = "";
-    this._seededConfigKeys = [];
-    this._loadedStorageEntity = null;
+    this.storageNotice = "";
+    this._loaded = false;
+    this._loadingGoals = false;
+    this._seededConfig = false;
+    this._migratedLocalStorage = false;
   }
 
   setConfig(config) {
     this.config = {
-      storage_entity: DEFAULT_STORAGE_ENTITY,
+      storage_key: DEFAULT_STORAGE_KEY,
       debug: false,
       goals: [],
       ...(config || {}),
     };
-    this._loadedStorageEntity = null;
-    this._loadGoalsFromState();
+    this._loaded = false;
+    this._seededConfig = false;
+    this._loadGoals();
   }
 
   updated(changed) {
-    if (changed.has("hass") || changed.has("config")) {
-      this._loadGoalsFromState();
+    if ((changed.has("hass") || changed.has("config")) && !this._loaded) {
+      this._loadGoals();
     }
   }
 
@@ -251,6 +263,7 @@ class GoalTrackerCard extends LitElement {
     return html`
       <ha-card>
         ${this.storageError ? html`<div class="error">${this.storageError}</div>` : ""}
+        ${this.storageNotice ? html`<div class="notice">${this.storageNotice}</div>` : ""}
         ${this.goals.length
           ? html`<div class="goal-list">${this.goals.map((goal) => this._renderGoal(goal))}</div>`
           : html`<p class="empty">No goals yet.</p>`}
@@ -472,14 +485,13 @@ class GoalTrackerCard extends LitElement {
     this.showDailyModal = false;
   }
 
-  _saveGoal() {
+  async _saveGoal() {
     const goal = normalizeGoal({
       ...this.newGoal,
       daily: generateDailyArray(this.newGoal.start, this.newGoal.end),
     });
-    this.goals = [...this.goals, goal];
     this.showModal = false;
-    this._saveGoalsToState();
+    await this._saveGoalToBackend(goal);
   }
 
   _confirmRemove(goalId) {
@@ -490,47 +502,43 @@ class GoalTrackerCard extends LitElement {
     this.confirmingDeleteId = null;
   }
 
-  _removeGoalImmediately(goalId) {
-    this.goals = this.goals.filter((goal) => goal.id !== goalId);
+  async _removeGoalImmediately(goalId) {
     this.confirmingDeleteId = null;
-    this._saveGoalsToState();
+    try {
+      const result = await this._callGoalTracker("delete_goal", { goal_id: goalId });
+      this.goals = result.goals || [];
+      this._clearStorageMessages();
+    } catch (error) {
+      this._handleBackendError(error);
+    }
   }
 
-  _saveProgress() {
+  async _saveProgress() {
     const updatedGoal = normalizeGoal(this.progressEditingGoal);
-    this.goals = this.goals.map((goal) => (goal.id === updatedGoal.id ? updatedGoal : goal));
-    this._saveGoalsToState();
     this._closeSetProgressModal();
+    await this._setProgress(updatedGoal.id, updatedGoal.progress);
   }
 
-  _incrementProgress(goalId, delta) {
-    this.goals = this.goals.map((goal) =>
-      goal.id === goalId
-        ? normalizeGoal({
-            ...goal,
-            progress: goal.progress + delta,
-          })
-        : goal
-    );
-    this._saveGoalsToState();
+  async _incrementProgress(goalId, delta) {
+    const goal = this.goals.find((item) => item.id === goalId);
+    if (!goal) return;
+    await this._setProgress(goalId, goal.progress + delta);
   }
 
-  _saveDailyValue() {
+  async _saveDailyValue() {
     const { goalId, index, value } = this.dailyEdit;
-    this.goals = this.goals.map((goal) => {
-      if (goal.id !== goalId || !Array.isArray(goal.daily)) return goal;
-      const updatedDaily = [...goal.daily];
-      const oldValue = updatedDaily[index] ?? 0;
-      const clamped = Math.max(0, Number.isFinite(Number(value)) ? Number(value) : 0);
-      updatedDaily[index] = clamped;
-      return normalizeGoal({
-        ...goal,
-        daily: updatedDaily,
-        progress: goal.progress + (clamped - oldValue),
-      });
-    });
-    this._saveGoalsToState();
     this._closeDailyModal();
+    try {
+      const result = await this._callGoalTracker("set_daily_value", {
+        goal_id: goalId,
+        index,
+        value,
+      });
+      this.goals = result.goals || [];
+      this._clearStorageMessages();
+    } catch (error) {
+      this._handleBackendError(error);
+    }
   }
 
   _nextDay() {
@@ -568,68 +576,95 @@ class GoalTrackerCard extends LitElement {
     };
   }
 
-  async _loadGoalsFromState() {
-    if (!this.hass || !this.config) return;
-    const storageEntity = this.config.storage_entity || DEFAULT_STORAGE_ENTITY;
-    if (!storageEntity.startsWith("input_text.")) {
-      this.storageError = `Storage entity "${storageEntity}" is invalid. Goal Tracker Card currently requires an input_text helper.`;
-      this.goals = [];
-      return;
-    }
+  async _loadGoals() {
+    if (!this.hass || !this.config || this._loadingGoals) return;
+    this._loadingGoals = true;
+    try {
+      if (!this._seededConfig && Array.isArray(this.config.goals) && this.config.goals.length) {
+        await this._callGoalTracker("seed_goals", { goals: this.config.goals });
+        this._seededConfig = true;
+      }
 
-    if (this._loadedStorageEntity === storageEntity) return;
+      let result = await this._callGoalTracker("get_goals");
+      if (!this._migratedLocalStorage && (!result.goals || result.goals.length === 0)) {
+        const migratedGoals = this._readLegacyBrowserGoals();
+        if (migratedGoals.length) {
+          result = await this._callGoalTracker("seed_goals", { goals: migratedGoals });
+          this.storageNotice = "Imported existing browser-stored goals into Home Assistant storage.";
+        }
+        this._migratedLocalStorage = true;
+      }
 
-    const entity = this.hass.states[storageEntity];
-    if (!entity) {
-      this.storageError = `Storage entity "${storageEntity}" was not found. Create an input_text helper or set storage_entity in the card config.`;
-      this.goals = [];
-      return;
-    }
-
-    const parsed = parseStoredGoals(entity.state);
-    const seeded = applyConfigSeeds(parsed, this.config.goals);
-
-    this.storageError = parsed.error || "";
-    this.goals = seeded.goals;
-    this._seededConfigKeys = seeded.seededConfigKeys;
-    this._loadedStorageEntity = storageEntity;
-
-    if (parsed.needsSave || seeded.changed) {
-      await this._saveGoalsToState();
+      this.goals = result.goals || [];
+      this._loaded = true;
+      this.storageError = "";
+    } catch (error) {
+      this._handleBackendError(error);
+    } finally {
+      this._loadingGoals = false;
     }
   }
 
-  async _saveGoalsToState() {
-    if (!this.hass) return;
-    const storageEntity = this.config.storage_entity || DEFAULT_STORAGE_ENTITY;
-    if (!storageEntity.startsWith("input_text.")) {
-      this.storageError = `Storage entity "${storageEntity}" is invalid. Goal Tracker Card currently requires an input_text helper.`;
-      return;
-    }
-
-    if (!this.hass.states[storageEntity]) {
-      this.storageError = `Storage entity "${storageEntity}" was not found. Create an input_text helper or set storage_entity in the card config.`;
-      return;
-    }
-
+  async _saveGoalToBackend(goal) {
     try {
-      await this.hass.callService("input_text", "set_value", {
-        entity_id: storageEntity,
-        value: serializeStorage(this.goals, this._seededConfigKeys),
-      });
-      this.storageError = "";
-      this._loadedStorageEntity = storageEntity;
+      const result = await this._callGoalTracker("save_goal", { goal });
+      this.goals = result.goals || [];
+      this._clearStorageMessages();
     } catch (error) {
-      this.storageError = `Failed to save goals to "${storageEntity}".`;
-      console.warn("Failed to save goals to input_text:", error);
+      this._handleBackendError(error);
     }
+  }
+
+  async _setProgress(goalId, progress) {
+    try {
+      const result = await this._callGoalTracker("set_progress", {
+        goal_id: goalId,
+        progress,
+      });
+      this.goals = result.goals || [];
+      this._clearStorageMessages();
+    } catch (error) {
+      this._handleBackendError(error);
+    }
+  }
+
+  _callGoalTracker(command, payload = {}) {
+    if (!this.hass?.callWS) {
+      return Promise.reject(new Error("Home Assistant WebSocket API is not available."));
+    }
+    return this.hass.callWS({
+      type: `goal_tracker/${command}`,
+      ...payload,
+    });
+  }
+
+  _readLegacyBrowserGoals() {
+    try {
+      const value = window.localStorage.getItem(this.config.storage_key || DEFAULT_STORAGE_KEY);
+      const parsed = value ? parseStoredGoals(value) : null;
+      return parsed?.goals || [];
+    } catch (error) {
+      console.warn("Failed to read legacy browser storage:", error);
+      return [];
+    }
+  }
+
+  _handleBackendError(error) {
+    this.storageError = "Goal Tracker integration is not loaded. Add the Goal Tracker integration or restart Home Assistant after installing it.";
+    this.storageNotice = "";
+    console.warn("Goal Tracker backend call failed:", error);
+  }
+
+  _clearStorageMessages() {
+    this.storageError = "";
+    this.storageNotice = "";
   }
 
   _getCardSize() {
     return 3 + this.goals.length;
   }
 
-  _addTestGoals() {
+  async _addTestGoals() {
     const today = new Date();
     const todayStr = toIsoDate(today);
 
@@ -692,13 +727,19 @@ class GoalTrackerCard extends LitElement {
       }),
     ];
 
-    this.goals = [...this.goals, ...testGoals];
-    this._saveGoalsToState();
+    for (const goal of testGoals) {
+      await this._saveGoalToBackend(goal);
+    }
   }
 
-  _removeTestGoals() {
-    this.goals = this.goals.filter((goal) => !goal.name.startsWith("_TEST_"));
-    this._saveGoalsToState();
+  async _removeTestGoals() {
+    try {
+      const result = await this._callGoalTracker("remove_test_goals");
+      this.goals = result.goals || [];
+      this._clearStorageMessages();
+    } catch (error) {
+      this._handleBackendError(error);
+    }
   }
 
   _generateMockDaily(values, totalLength) {

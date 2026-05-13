@@ -1,0 +1,11 @@
+{
+  "domain": "goal_tracker",
+  "name": "Goal Tracker",
+  "version": "0.1.0",
+  "documentation": "https://github.com/alexandrugavrila/goal-tracker-card",
+  "issue_tracker": "https://github.com/alexandrugavrila/goal-tracker-card/issues",
+  "codeowners": ["@alexandrugavrila"],
+  "config_flow": true,
+  "dependencies": ["frontend", "lovelace"],
+  "iot_class": "local_push"
+}
