@@ -4,3 +4,4 @@ views:
     path: test
     cards:
       - type: custom:goal-tracker-card
+        debug: true
