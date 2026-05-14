@@ -3,6 +3,7 @@ import {
   DEFAULT_STORAGE_KEY,
   addDaysIso,
   countDaysBetween,
+  createId,
   generateDailyArray,
   getDayColor,
   getExpectedProgressPercent,
@@ -438,7 +439,7 @@ class GoalTrackerCard extends LitElement {
   _openAddModal() {
     const start = todayIso();
     this.newGoal = {
-      id: crypto.randomUUID(),
+      id: createId(),
       name: "",
       unit: "",
       target: 1,
@@ -704,7 +705,7 @@ class GoalTrackerCard extends LitElement {
 
     const testGoals = [
       normalizeGoal({
-        id: crypto.randomUUID(),
+        id: createId(),
         name: "_TEST_ Run",
         unit: "km",
         target: 50,
@@ -715,7 +716,7 @@ class GoalTrackerCard extends LitElement {
         progress: runDaily.reduce((sum, value) => sum + value, 0),
       }),
       normalizeGoal({
-        id: crypto.randomUUID(),
+        id: createId(),
         name: "_TEST_ Read",
         unit: "pages",
         target: 300,

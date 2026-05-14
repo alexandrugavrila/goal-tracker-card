@@ -29,6 +29,19 @@ const STORAGE_VERSION = 1;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+function createId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  const randomPart = Array.from({ length: 4 }, () =>
+    Math.floor(Math.random() * 0xffffffff)
+      .toString(16)
+      .padStart(8, "0")
+  ).join("");
+  return `goal-${Date.now().toString(36)}-${randomPart}`;
+}
+
 function todayIso() {
   return toIsoDate(new Date());
 }
@@ -98,7 +111,7 @@ function normalizeGoal(raw = {}, fallback = {}) {
   const progress = clamp(sanitizeNumber(raw.progress, fallback.progress ?? 0, 0), 0, safeTarget);
 
   return {
-    id: typeof raw.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
+    id: typeof raw.id === "string" && raw.id ? raw.id : createId(),
     name: typeof raw.name === "string" ? raw.name : fallback.name ?? "",
     unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
     target: safeTarget,
@@ -615,7 +628,7 @@ class GoalTrackerCard extends i {
   _openAddModal() {
     const start = todayIso();
     this.newGoal = {
-      id: crypto.randomUUID(),
+      id: createId(),
       name: "",
       unit: "",
       target: 1,
@@ -881,7 +894,7 @@ class GoalTrackerCard extends i {
 
     const testGoals = [
       normalizeGoal({
-        id: crypto.randomUUID(),
+        id: createId(),
         name: "_TEST_ Run",
         unit: "km",
         target: 50,
@@ -892,7 +905,7 @@ class GoalTrackerCard extends i {
         progress: runDaily.reduce((sum, value) => sum + value, 0),
       }),
       normalizeGoal({
-        id: crypto.randomUUID(),
+        id: createId(),
         name: "_TEST_ Read",
         unit: "pages",
         target: 300,
