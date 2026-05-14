@@ -62,6 +62,40 @@ Run tests before committing:
 npm test
 ```
 
+## Publishing an Update for HACS
+
+After verifying the change locally, commit and push to `main`:
+
+```powershell
+git status
+git add -A
+git commit -m "fix: describe the change"
+git push origin main
+```
+
+Tag a new version higher than the current release:
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+On HAOS, update through HACS:
+
+1. Open **HACS**.
+2. Open **Goal Tracker**.
+3. Use **Update information** if the new tag is not visible.
+4. Click **Download** or **Redownload** and choose the new version.
+5. Restart Home Assistant.
+6. Hard refresh the dashboard.
+
+The dashboard resource should remain:
+
+```yaml
+- url: /goal_tracker_static/goal-tracker-card.js
+  type: module
+```
+
 ## Stopping the Dev Container
 
 ```powershell
