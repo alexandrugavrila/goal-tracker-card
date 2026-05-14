@@ -48,19 +48,39 @@ npm run build
 .\scripts\link-dev.ps1
 ```
 
+The sync script updates the Lovelace resource query string in `dev_instance\config\configuration.yaml` so Home Assistant imports a fresh card module instead of a cached `goal-tracker-card.js`.
+
 Refresh the Home Assistant dashboard:
 
 ```text
 http://localhost:8124/goal-tracker/test
 ```
 
-If the browser serves stale JavaScript, hard refresh or clear site data for `localhost:8124`.
+If the browser still serves stale JavaScript, hard refresh or clear site data for `localhost:8124`.
 
 Run tests before committing:
 
 ```powershell
 npm test
 ```
+
+## Rebuilding the Dev Container
+
+Use this when you want to completely stop and recreate the Docker containers while preserving local Home Assistant state:
+
+```powershell
+.\scripts\rebuild-dev.ps1
+```
+
+The rebuild script:
+
+- Runs `docker compose down --remove-orphans`
+- Runs `npm run build`
+- Copies the rebuilt card and integration into `dev_instance\config`
+- Pulls the latest Home Assistant image
+- Starts Docker with `--force-recreate --build`
+
+This preserves `dev_instance\config\.storage`, so onboarding, auth state, and saved Goal Tracker data remain intact. Use `.\scripts\reset-dev.ps1` only when you intentionally want to wipe local Home Assistant state.
 
 ## Publishing an Update for HACS
 

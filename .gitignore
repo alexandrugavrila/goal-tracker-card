@@ -5,6 +5,7 @@
 __pycache__/
 
 dev_instance/config/.storage
+dev_instance/config/.ha_run.lock
 dev_instance/config/blueprints
 dev_instance/config/custom_components
 dev_instance/config/tts

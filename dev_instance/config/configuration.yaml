@@ -20,7 +20,7 @@ goal_tracker:
 frontend:
 
 lovelace:
-  mode: yaml
+  resource_mode: yaml
   dashboards:
     goal-tracker:
       mode: yaml
@@ -29,5 +29,5 @@ lovelace:
       show_in_sidebar: true
       filename: dashboards/home.yaml
   resources:
-    - url: /goal_tracker_static/goal-tracker-card.js
+    - url: /goal_tracker_static/goal-tracker-card.js?v=dev-1778779426
       type: module

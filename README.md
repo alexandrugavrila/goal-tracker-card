@@ -1,13 +1,15 @@
 # Goal Tracker for Home Assistant
 
-A Home Assistant integration and Lovelace card for tracking goals with progress bars and daily status indicators.
+A Home Assistant integration and Lovelace card for tracking goals with progress bars and linked accountability practices.
 
 ## Features
 
 - Goal data persisted in Home Assistant `.storage`
+- Practice data persisted alongside goals in Home Assistant `.storage`
 - Lovelace card served by the integration
 - Actual progress with an expected-progress marker
-- Daily progress boxes with editable per-day values
+- Linked practice rows with editable daily numeric or done/missed values
+- Many-to-many links between goals and practices
 - Compact summary sensor for automations and dashboards
 - Optional YAML seed goals in the card config
 - Optional debug controls for local test data
@@ -38,7 +40,7 @@ If your dashboard uses YAML resources, add the integration-served card resource:
 
 ```yaml
 lovelace:
-  mode: yaml
+  resource_mode: yaml
   resources:
     - url: /goal_tracker_static/goal-tracker-card.js
       type: module
@@ -55,6 +57,8 @@ Storage-mode dashboards may get the resource registered automatically by the int
 | `storage_key` | string | `goal-tracker-card:goals` | Legacy browser storage key used only for one-time migration. |
 
 YAML goals are seed data. After they are copied into `.storage`, user edits are saved by the backend integration and the same seed goals are not duplicated on reload.
+
+Goal progress and practice accountability are intentionally separate. Goal progress is set manually with the goal controls, while practice rows show the work being done toward one or more linked goals.
 
 ## Development
 

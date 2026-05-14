@@ -41,3 +41,23 @@ Write-Host "Copying Goal Tracker integration:"
 Write-Host "  Target: $integrationTarget"
 Write-Host "  Source: $integrationSource"
 Copy-Item -Path $integrationSource -Destination $integrationTarget -Recurse -Force
+
+$configurationPath = "$PSScriptRoot\..\dev_instance\config\configuration.yaml"
+if (Test-Path $configurationPath) {
+    $cacheBust = "dev-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    $resourcePattern = '(/goal_tracker_static/goal-tracker-card\.js)(\?v=[^"\s]*)?'
+    $configuration = Get-Content $configurationPath -Raw
+    $updatedConfiguration = [regex]::Replace(
+        $configuration,
+        $resourcePattern,
+        "`$1?v=$cacheBust"
+    )
+
+    if ($updatedConfiguration -ne $configuration) {
+        Write-Host "Updating Lovelace resource cache-bust token:"
+        Write-Host "  /goal_tracker_static/goal-tracker-card.js?v=$cacheBust"
+        Set-Content -Path $configurationPath -Value $updatedConfiguration -NoNewline
+    } else {
+        Write-Host "No Lovelace card resource found in $configurationPath — skipping cache-bust update."
+    }
+}

@@ -42,6 +42,48 @@ set_daily_value:
         number:
           min: 0
           mode: box
+create_practice:
+  name: Create practice
+  description: Create or replace a practice in Goal Tracker storage.
+  fields:
+    practice:
+      required: true
+      selector:
+        object:
+update_practice:
+  name: Update practice
+  description: Create or replace a practice in Goal Tracker storage.
+  fields:
+    practice:
+      required: true
+      selector:
+        object:
+delete_practice:
+  name: Delete practice
+  description: Delete a practice by id.
+  fields:
+    practice_id:
+      required: true
+      selector:
+        text:
+set_practice_value:
+  name: Set practice value
+  description: Set one practice value for a date.
+  fields:
+    practice_id:
+      required: true
+      selector:
+        text:
+    date:
+      required: true
+      selector:
+        date:
+    value:
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
 clear_goals:
   name: Clear goals
   description: Remove all goals from Goal Tracker storage.

@@ -16,10 +16,14 @@ def _manager(hass: HomeAssistant) -> GoalTrackerStore:
 @callback
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_goals)
+    websocket_api.async_register_command(hass, ws_get_data)
     websocket_api.async_register_command(hass, ws_save_goal)
     websocket_api.async_register_command(hass, ws_delete_goal)
     websocket_api.async_register_command(hass, ws_set_progress)
     websocket_api.async_register_command(hass, ws_set_daily_value)
+    websocket_api.async_register_command(hass, ws_save_practice)
+    websocket_api.async_register_command(hass, ws_delete_practice)
+    websocket_api.async_register_command(hass, ws_set_practice_value)
     websocket_api.async_register_command(hass, ws_seed_goals)
     websocket_api.async_register_command(hass, ws_remove_test_goals)
 
@@ -28,6 +32,12 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
 @websocket_api.async_response
 async def ws_get_goals(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     connection.send_result(msg["id"], {"goals": _manager(hass).goals})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_data"})
+@websocket_api.async_response
+async def ws_get_data(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    connection.send_result(msg["id"], _manager(hass).data)
 
 
 @websocket_api.websocket_command(
@@ -39,7 +49,7 @@ async def ws_get_goals(hass: HomeAssistant, connection: websocket_api.ActiveConn
 @websocket_api.async_response
 async def ws_save_goal(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     goal = await _manager(hass).async_save_goal(msg["goal"])
-    connection.send_result(msg["id"], {"goal": goal, "goals": _manager(hass).goals})
+    connection.send_result(msg["id"], {"goal": goal, **_manager(hass).data})
 
 
 @websocket_api.websocket_command(
@@ -51,7 +61,7 @@ async def ws_save_goal(hass: HomeAssistant, connection: websocket_api.ActiveConn
 @websocket_api.async_response
 async def ws_delete_goal(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     goals = await _manager(hass).async_delete_goal(msg["goal_id"])
-    connection.send_result(msg["id"], {"goals": goals})
+    connection.send_result(msg["id"], {"goals": goals, "practices": _manager(hass).practices})
 
 
 @websocket_api.websocket_command(
@@ -64,7 +74,7 @@ async def ws_delete_goal(hass: HomeAssistant, connection: websocket_api.ActiveCo
 @websocket_api.async_response
 async def ws_set_progress(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     goal = await _manager(hass).async_set_progress(msg["goal_id"], msg["progress"])
-    connection.send_result(msg["id"], {"goal": goal, "goals": _manager(hass).goals})
+    connection.send_result(msg["id"], {"goal": goal, **_manager(hass).data})
 
 
 @websocket_api.websocket_command(
@@ -78,7 +88,47 @@ async def ws_set_progress(hass: HomeAssistant, connection: websocket_api.ActiveC
 @websocket_api.async_response
 async def ws_set_daily_value(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     goal = await _manager(hass).async_set_daily_value(msg["goal_id"], msg["index"], msg["value"])
-    connection.send_result(msg["id"], {"goal": goal, "goals": _manager(hass).goals})
+    connection.send_result(msg["id"], {"goal": goal, **_manager(hass).data})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/save_practice",
+        vol.Required("practice"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_save_practice(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    practice = await _manager(hass).async_save_practice(msg["practice"])
+    connection.send_result(msg["id"], {"practice": practice, **_manager(hass).data})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/delete_practice",
+        vol.Required("practice_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_delete_practice(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    practices = await _manager(hass).async_delete_practice(msg["practice_id"])
+    connection.send_result(msg["id"], {"practices": practices, "goals": _manager(hass).goals})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_practice_value",
+        vol.Required("practice_id"): str,
+        vol.Required("date"): str,
+        vol.Required("value"): vol.Coerce(float),
+    }
+)
+@websocket_api.async_response
+async def ws_set_practice_value(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    practice = await _manager(hass).async_set_practice_value(
+        msg["practice_id"], msg["date"], msg["value"]
+    )
+    connection.send_result(msg["id"], {"practice": practice, **_manager(hass).data})
 
 
 @websocket_api.websocket_command(
@@ -90,11 +140,11 @@ async def ws_set_daily_value(hass: HomeAssistant, connection: websocket_api.Acti
 @websocket_api.async_response
 async def ws_seed_goals(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     goals = await _manager(hass).async_seed_goals(msg["goals"])
-    connection.send_result(msg["id"], {"goals": goals})
+    connection.send_result(msg["id"], {"goals": goals, "practices": _manager(hass).practices})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/remove_test_goals"})
 @websocket_api.async_response
 async def ws_remove_test_goals(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     goals = await _manager(hass).async_remove_test_goals()
-    connection.send_result(msg["id"], {"goals": goals})
+    connection.send_result(msg["id"], {"goals": goals, "practices": _manager(hass).practices})

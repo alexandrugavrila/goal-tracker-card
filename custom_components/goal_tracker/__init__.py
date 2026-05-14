@@ -92,6 +92,17 @@ def _register_services(hass: HomeAssistant) -> None:
             call.data["goal_id"], call.data["index"], call.data["value"]
         )
 
+    async def create_or_update_practice(call: ServiceCall) -> None:
+        await hass.data[DOMAIN][DATA_MANAGER].async_save_practice(call.data["practice"])
+
+    async def delete_practice(call: ServiceCall) -> None:
+        await hass.data[DOMAIN][DATA_MANAGER].async_delete_practice(call.data["practice_id"])
+
+    async def set_practice_value(call: ServiceCall) -> None:
+        await hass.data[DOMAIN][DATA_MANAGER].async_set_practice_value(
+            call.data["practice_id"], call.data["date"], call.data["value"]
+        )
+
     async def clear_goals(call: ServiceCall) -> None:
         await hass.data[DOMAIN][DATA_MANAGER].async_clear_goals()
 
@@ -112,6 +123,27 @@ def _register_services(hass: HomeAssistant) -> None:
             {
                 vol.Required("goal_id"): cv.string,
                 vol.Required("index"): vol.Coerce(int),
+                vol.Required("value"): vol.Coerce(float),
+            }
+        ),
+    )
+    practice_schema = vol.Schema({vol.Required("practice"): dict})
+    hass.services.async_register(DOMAIN, "create_practice", create_or_update_practice, schema=practice_schema)
+    hass.services.async_register(DOMAIN, "update_practice", create_or_update_practice, schema=practice_schema)
+    hass.services.async_register(
+        DOMAIN,
+        "delete_practice",
+        delete_practice,
+        schema=vol.Schema({vol.Required("practice_id"): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_practice_value",
+        set_practice_value,
+        schema=vol.Schema(
+            {
+                vol.Required("practice_id"): cv.string,
+                vol.Required("date"): cv.string,
                 vol.Required("value"): vol.Coerce(float),
             }
         ),

@@ -1,5 +1,6 @@
 export const DEFAULT_STORAGE_KEY = "goal-tracker-card:goals";
-export const STORAGE_VERSION = 1;
+export const STORAGE_VERSION = 2;
+export const PRACTICE_MODES = ["checkbox", "number"];
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -97,6 +98,52 @@ export function normalizeGoal(raw = {}, fallback = {}) {
   };
 }
 
+export function normalizePractice(raw = {}, fallback = {}) {
+  const mode = PRACTICE_MODES.includes(raw.mode) ? raw.mode : fallback.mode ?? "number";
+  const rawGoalIds = Array.isArray(raw.goalIds) ? raw.goalIds : fallback.goalIds ?? [];
+  const goalIds = [...new Set(rawGoalIds.filter((goalId) => typeof goalId === "string" && goalId))];
+  const target = sanitizeNumber(raw.targetPerDay, fallback.targetPerDay ?? 1, 0);
+  const targetPerDay = target > 0 ? target : 1;
+  const sourceEntries = raw.entries && typeof raw.entries === "object" ? raw.entries : fallback.entries ?? {};
+  const entries = {};
+
+  Object.entries(sourceEntries).forEach(([dateKey, value]) => {
+    if (!parseDate(dateKey)) return;
+    const entryValue = sanitizeNumber(value, 0, 0);
+    entries[dateKey] = mode === "checkbox" && entryValue > 0 ? 1 : entryValue;
+  });
+
+  return {
+    id: typeof raw.id === "string" && raw.id ? raw.id : createId(),
+    name: typeof raw.name === "string" ? raw.name : fallback.name ?? "",
+    mode,
+    unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
+    targetPerDay,
+    goalIds,
+    entries,
+  };
+}
+
+export function createPracticeFromGoalDaily(goal) {
+  const normalizedGoal = normalizeGoal(goal);
+  if (!Array.isArray(goal?.daily) || goal.daily.length === 0) return null;
+  const daily = generateDailyArray(normalizedGoal.start, normalizedGoal.end, goal.daily);
+  if (!daily.length) return null;
+  const entries = {};
+  daily.forEach((value, index) => {
+    const dateKey = addDaysIso(normalizedGoal.start, index);
+    if (dateKey) entries[dateKey] = value;
+  });
+  return normalizePractice({
+    name: normalizedGoal.name,
+    mode: "number",
+    unit: normalizedGoal.unit,
+    targetPerDay: Math.max(1, normalizedGoal.target / daily.length),
+    goalIds: [normalizedGoal.id],
+    entries,
+  });
+}
+
 export function goalSeedKey(goal) {
   return [
     goal.id || "",
@@ -117,15 +164,22 @@ export function parseStoredGoals(state) {
     const parsed = JSON.parse(state);
     if (Array.isArray(parsed)) {
       return {
-        ...createStorageEnvelope(parsed),
+        ...createStorageEnvelope(parsed, parsed.map(createPracticeFromGoalDaily).filter(Boolean)),
         needsSave: true,
       };
     }
 
     if (parsed && typeof parsed === "object" && Array.isArray(parsed.goals)) {
+      const goals = parsed.goals.map((goal) => normalizeGoal(goal));
+      const practices = Array.isArray(parsed.practices) && parsed.practices.length
+        ? parsed.practices.map((practice) => normalizePractice(practice))
+        : parsed.version !== STORAGE_VERSION
+          ? parsed.goals.map(createPracticeFromGoalDaily).filter(Boolean)
+          : [];
       return {
         version: STORAGE_VERSION,
-        goals: parsed.goals.map((goal) => normalizeGoal(goal)),
+        goals,
+        practices,
         seededConfigKeys: Array.isArray(parsed.seededConfigKeys)
           ? parsed.seededConfigKeys.filter((key) => typeof key === "string")
           : [],
@@ -145,11 +199,12 @@ export function parseStoredGoals(state) {
   };
 }
 
-export function createStorageEnvelope(goals = [], seededConfigKeys = []) {
+export function createStorageEnvelope(goals = [], practices = [], seededConfigKeys = []) {
   return {
     version: STORAGE_VERSION,
     goals: goals.map((goal) => normalizeGoal(goal)),
-    seededConfigKeys: [...seededConfigKeys],
+    practices: practices.map((practice) => normalizePractice(practice)),
+    seededConfigKeys: seededConfigKeys.filter((key) => typeof key === "string"),
     needsSave: false,
   };
 }
@@ -177,15 +232,17 @@ export function applyConfigSeeds(envelope, configGoals = []) {
   return {
     version: STORAGE_VERSION,
     goals,
+    practices: envelope.practices || [],
     seededConfigKeys: [...seededConfigKeys],
     changed,
   };
 }
 
-export function serializeStorage(goals, seededConfigKeys = []) {
+export function serializeStorage(goals, seededConfigKeys = [], practices = []) {
   return JSON.stringify({
     version: STORAGE_VERSION,
     goals: goals.map((goal) => normalizeGoal(goal)),
+    practices: practices.map((practice) => normalizePractice(practice)),
     seededConfigKeys,
   });
 }
@@ -223,4 +280,23 @@ export function getDayColor(goal, index, nowValue = new Date()) {
   const expectedPerDay = goal.daily?.length ? goal.target / goal.daily.length : goal.target;
   if (expectedPerDay > 0 && value < expectedPerDay) return "#f1c40f";
   return "#2ecc71";
+}
+
+export function getPracticeValueForDate(practice, dateKey) {
+  if (!practice?.entries || !dateKey) return 0;
+  return sanitizeNumber(practice.entries[dateKey], 0, 0);
+}
+
+export function isPracticeCompleteForDate(practice, dateKey) {
+  const value = getPracticeValueForDate(practice, dateKey);
+  if (practice?.mode === "checkbox") return value > 0;
+  return value >= sanitizeNumber(practice?.targetPerDay, 1, 0);
+}
+
+export function getPracticeDayColor(practice, dateKey, nowValue = new Date()) {
+  if (!dateKey || dateKey > toIsoDate(nowValue)) return "#eee";
+  const value = getPracticeValueForDate(practice, dateKey);
+  if (value === 0) return "#e74c3c";
+  if (isPracticeCompleteForDate(practice, dateKey)) return "#2ecc71";
+  return "#f1c40f";
 }

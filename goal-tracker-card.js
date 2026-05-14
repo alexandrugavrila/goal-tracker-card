@@ -25,7 +25,8 @@ const t=globalThis,i$1=t=>t,s$1=t.trustedTypes,e=s$1?s$1.createPolicy("lit-html"
  */const s=globalThis;class i extends y$1{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0;}createRenderRoot(){const t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){const r=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=D(r,this.renderRoot,this.renderOptions);}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(true);}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(false);}render(){return E}}i._$litElement$=true,i["finalized"]=true,s.litElementHydrateSupport?.({LitElement:i});const o=s.litElementPolyfillSupport;o?.({LitElement:i});(s.litElementVersions??=[]).push("4.2.2");
 
 const DEFAULT_STORAGE_KEY = "goal-tracker-card:goals";
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
+const PRACTICE_MODES = ["checkbox", "number"];
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -123,6 +124,52 @@ function normalizeGoal(raw = {}, fallback = {}) {
   };
 }
 
+function normalizePractice(raw = {}, fallback = {}) {
+  const mode = PRACTICE_MODES.includes(raw.mode) ? raw.mode : fallback.mode ?? "number";
+  const rawGoalIds = Array.isArray(raw.goalIds) ? raw.goalIds : fallback.goalIds ?? [];
+  const goalIds = [...new Set(rawGoalIds.filter((goalId) => typeof goalId === "string" && goalId))];
+  const target = sanitizeNumber(raw.targetPerDay, fallback.targetPerDay ?? 1, 0);
+  const targetPerDay = target > 0 ? target : 1;
+  const sourceEntries = raw.entries && typeof raw.entries === "object" ? raw.entries : fallback.entries ?? {};
+  const entries = {};
+
+  Object.entries(sourceEntries).forEach(([dateKey, value]) => {
+    if (!parseDate(dateKey)) return;
+    const entryValue = sanitizeNumber(value, 0, 0);
+    entries[dateKey] = mode === "checkbox" && entryValue > 0 ? 1 : entryValue;
+  });
+
+  return {
+    id: typeof raw.id === "string" && raw.id ? raw.id : createId(),
+    name: typeof raw.name === "string" ? raw.name : fallback.name ?? "",
+    mode,
+    unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
+    targetPerDay,
+    goalIds,
+    entries,
+  };
+}
+
+function createPracticeFromGoalDaily(goal) {
+  const normalizedGoal = normalizeGoal(goal);
+  if (!Array.isArray(goal?.daily) || goal.daily.length === 0) return null;
+  const daily = generateDailyArray(normalizedGoal.start, normalizedGoal.end, goal.daily);
+  if (!daily.length) return null;
+  const entries = {};
+  daily.forEach((value, index) => {
+    const dateKey = addDaysIso(normalizedGoal.start, index);
+    if (dateKey) entries[dateKey] = value;
+  });
+  return normalizePractice({
+    name: normalizedGoal.name,
+    mode: "number",
+    unit: normalizedGoal.unit,
+    targetPerDay: Math.max(1, normalizedGoal.target / daily.length),
+    goalIds: [normalizedGoal.id],
+    entries,
+  });
+}
+
 function parseStoredGoals(state) {
   if (!state || state === "unknown" || state === "unavailable") {
     return createStorageEnvelope();
@@ -132,15 +179,22 @@ function parseStoredGoals(state) {
     const parsed = JSON.parse(state);
     if (Array.isArray(parsed)) {
       return {
-        ...createStorageEnvelope(parsed),
+        ...createStorageEnvelope(parsed, parsed.map(createPracticeFromGoalDaily).filter(Boolean)),
         needsSave: true,
       };
     }
 
     if (parsed && typeof parsed === "object" && Array.isArray(parsed.goals)) {
+      const goals = parsed.goals.map((goal) => normalizeGoal(goal));
+      const practices = Array.isArray(parsed.practices) && parsed.practices.length
+        ? parsed.practices.map((practice) => normalizePractice(practice))
+        : parsed.version !== STORAGE_VERSION
+          ? parsed.goals.map(createPracticeFromGoalDaily).filter(Boolean)
+          : [];
       return {
         version: STORAGE_VERSION,
-        goals: parsed.goals.map((goal) => normalizeGoal(goal)),
+        goals,
+        practices,
         seededConfigKeys: Array.isArray(parsed.seededConfigKeys)
           ? parsed.seededConfigKeys.filter((key) => typeof key === "string")
           : [],
@@ -160,11 +214,12 @@ function parseStoredGoals(state) {
   };
 }
 
-function createStorageEnvelope(goals = [], seededConfigKeys = []) {
+function createStorageEnvelope(goals = [], practices = [], seededConfigKeys = []) {
   return {
     version: STORAGE_VERSION,
     goals: goals.map((goal) => normalizeGoal(goal)),
-    seededConfigKeys: [...seededConfigKeys],
+    practices: practices.map((practice) => normalizePractice(practice)),
+    seededConfigKeys: seededConfigKeys.filter((key) => typeof key === "string"),
     needsSave: false,
   };
 }
@@ -192,16 +247,23 @@ function isTodayForGoalIndex(goal, index, nowValue = new Date()) {
   return addDaysIso(goal.start, index) === toIsoDate(nowValue);
 }
 
-function getDayColor(goal, index, nowValue = new Date()) {
-  const dayIso = addDaysIso(goal.start, index);
-  if (!dayIso || dayIso > toIsoDate(nowValue)) return "#eee";
+function getPracticeValueForDate(practice, dateKey) {
+  if (!practice?.entries || !dateKey) return 0;
+  return sanitizeNumber(practice.entries[dateKey], 0, 0);
+}
 
-  const value = sanitizeNumber(goal.daily?.[index], 0, 0);
+function isPracticeCompleteForDate(practice, dateKey) {
+  const value = getPracticeValueForDate(practice, dateKey);
+  if (practice?.mode === "checkbox") return value > 0;
+  return value >= sanitizeNumber(practice?.targetPerDay, 1, 0);
+}
+
+function getPracticeDayColor(practice, dateKey, nowValue = new Date()) {
+  if (!dateKey || dateKey > toIsoDate(nowValue)) return "#eee";
+  const value = getPracticeValueForDate(practice, dateKey);
   if (value === 0) return "#e74c3c";
-
-  const expectedPerDay = goal.daily?.length ? goal.target / goal.daily.length : goal.target;
-  if (expectedPerDay > 0 && value < expectedPerDay) return "#f1c40f";
-  return "#2ecc71";
+  if (isPracticeCompleteForDate(practice, dateKey)) return "#2ecc71";
+  return "#f1c40f";
 }
 
 class GoalTrackerCard extends i {
@@ -209,12 +271,15 @@ class GoalTrackerCard extends i {
     hass: {},
     config: {},
     goals: { state: true },
+    practices: { state: true },
     showModal: { state: true },
     newGoal: { state: true },
     confirmingDeleteId: { state: true },
+    confirmingPracticeDeleteId: { state: true },
     progressEditingGoal: { state: true },
-    dailyEdit: { state: true },
-    showDailyModal: { state: true },
+    practiceEditing: { state: true },
+    practiceDayEdit: { state: true },
+    showPracticeDayModal: { state: true },
     storageError: { state: true },
     storageNotice: { state: true },
   };
@@ -296,6 +361,45 @@ class GoalTrackerCard extends i {
     .day.today {
       outline: 2px solid var(--primary-text-color, #000);
       outline-offset: 1px;
+    }
+
+    .practice-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .practice-row {
+      border-top: 1px solid var(--divider-color, #ddd);
+      padding-top: 8px;
+    }
+
+    .practice-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+
+    .practice-title {
+      font-weight: 600;
+      min-width: 0;
+    }
+
+    .practice-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .practice-empty {
+      color: var(--secondary-text-color, #666);
+      font-size: 13px;
+      margin-top: 8px;
     }
 
     .actions {
@@ -400,6 +504,34 @@ class GoalTrackerCard extends i {
       box-sizing: border-box;
     }
 
+    .modal-content input[type="checkbox"] {
+      width: auto;
+    }
+
+    .modal-content select {
+      width: 100%;
+      padding: 6px;
+      box-sizing: border-box;
+    }
+
+    .goal-checkboxes {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .goal-checkboxes label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+    }
+
+    .goal-checkboxes input {
+      width: auto;
+    }
+
     .modal-actions,
     .day-nav {
       display: flex;
@@ -413,16 +545,20 @@ class GoalTrackerCard extends i {
     super();
     this.config = {};
     this.goals = [];
+    this.practices = [];
     this.showModal = false;
     this.newGoal = {};
     this.confirmingDeleteId = null;
+    this.confirmingPracticeDeleteId = null;
     this.progressEditingGoal = null;
-    this.dailyEdit = {
+    this.practiceEditing = null;
+    this.practiceDayEdit = {
+      practiceId: null,
       goalId: null,
-      index: 0,
+      date: "",
       value: 0,
     };
-    this.showDailyModal = false;
+    this.showPracticeDayModal = false;
     this.storageError = "";
     this.storageNotice = "";
     this._loaded = false;
@@ -459,6 +595,7 @@ class GoalTrackerCard extends i {
           : b`<p class="empty">No goals yet.</p>`}
         <div class="actions">
           <button @click=${this._openAddModal}>Add Goal</button>
+          <button @click=${this._openAddPracticeModal}>Add Practice</button>
           ${this.config.debug
             ? b`
                 <button @click=${this._addTestGoals}>Add Test Data</button>
@@ -468,14 +605,17 @@ class GoalTrackerCard extends i {
         </div>
         ${this.showModal ? this._renderAddModal() : ""}
         ${this.confirmingDeleteId ? this._renderDeleteModal() : ""}
+        ${this.confirmingPracticeDeleteId ? this._renderPracticeDeleteModal() : ""}
         ${this.progressEditingGoal ? this._renderSetProgressModal() : ""}
-        ${this.showDailyModal ? this._renderDailyModal() : ""}
+        ${this.practiceEditing ? this._renderPracticeModal() : ""}
+        ${this.showPracticeDayModal ? this._renderPracticeDayModal() : ""}
       </ha-card>
     `;
   }
 
   _renderGoal(goal) {
-    const totalDays = goal.daily?.length || 0;
+    const totalDays = countDaysBetween(goal.start, goal.end);
+    const linkedPractices = this.practices.filter((practice) => practice.goalIds.includes(goal.id));
 
     return b`
       <div class="goal-row">
@@ -498,16 +638,43 @@ class GoalTrackerCard extends i {
           ></div>
         </div>
 
+        ${linkedPractices.length
+          ? b`
+              <div class="practice-list">
+                ${linkedPractices.map((practice) => this._renderPracticeForGoal(goal, practice, totalDays))}
+              </div>
+            `
+          : b`<div class="practice-empty">No linked practices.</div>`}
+      </div>
+    `;
+  }
+
+  _renderPracticeForGoal(goal, practice, totalDays) {
+    const targetLabel = practice.mode === "checkbox"
+      ? "done / missed"
+      : `${practice.targetPerDay} ${practice.unit || "units"}/day`;
+
+    return b`
+      <div class="practice-row">
+        <div class="practice-header">
+          <div class="practice-title">${practice.name || "Practice"} (${targetLabel})</div>
+          <div class="practice-actions">
+            <button class="set-button" @click=${() => this._openEditPracticeModal(practice)}>Edit</button>
+            <button class="delete-button" @click=${() => this._confirmRemovePractice(practice.id)}>Delete</button>
+          </div>
+        </div>
         <div class="day-indicators" style="grid-template-columns: repeat(${Math.max(totalDays, 1)}, 1fr);">
           ${Array.from({ length: totalDays }, (_, i) => {
-            const value = goal.daily?.[i] ?? 0;
-            const tooltip = `${addDaysIso(goal.start, i)}: ${value} ${goal.unit}`;
+            const dateKey = addDaysIso(goal.start, i);
+            const value = getPracticeValueForDate(practice, dateKey);
+            const unit = practice.mode === "checkbox" ? (value > 0 ? "done" : "missed") : `${value} ${practice.unit}`;
+            const tooltip = `${dateKey}: ${unit}`;
             return b`
               <div
                 class="day ${isTodayForGoalIndex(goal, i) ? "today" : ""}"
-                style="background:${getDayColor(goal, i)}; cursor: pointer;"
+                style="background:${getPracticeDayColor(practice, dateKey)}; cursor: pointer;"
                 title="${tooltip}"
-                @click=${() => this._openDailyModal(goal.id, i)}
+                @click=${() => this._openPracticeDayModal(practice.id, goal.id, dateKey)}
               ></div>
             `;
           })}
@@ -589,36 +756,126 @@ class GoalTrackerCard extends i {
     `;
   }
 
-  _renderDailyModal() {
-    const goal = this.goals.find((item) => item.id === this.dailyEdit.goalId);
-    if (!goal) return "";
-
-    const dateStr = addDaysIso(goal.start, this.dailyEdit.index);
+  _renderPracticeModal() {
+    const practice = this.practiceEditing;
 
     return b`
-      <div class="modal" @click=${this._closeDailyModal}>
+      <div class="modal" @click=${this._closePracticeModal}>
         <div class="modal-content" @click=${(event) => event.stopPropagation()}>
-          <h2>Edit Daily Progress</h2>
-          <p>${goal.name} <strong>${dateStr}</strong></p>
-          <label>Progress (${goal.unit})</label>
+          <h2>${practice.id && this.practices.some((item) => item.id === practice.id) ? "Edit Practice" : "New Practice"}</h2>
+          <label>Name</label>
           <input
-            type="number"
-            min="0"
-            .value=${this.dailyEdit.value}
-            @input=${(event) =>
-              (this.dailyEdit = {
-                ...this.dailyEdit,
-                value: Number(event.target.value),
-              })}
+            type="text"
+            .value=${practice.name}
+            @input=${(event) => this._updatePractice("name", event.target.value)}
           />
-          <div class="day-nav">
-            <button @click=${this._prevDay}>Previous</button>
-            <button @click=${this._setToday}>Today</button>
-            <button @click=${this._nextDay}>Next</button>
+          <label>Mode</label>
+          <select .value=${practice.mode} @change=${(event) => this._updatePractice("mode", event.target.value)}>
+            <option value="number">Number</option>
+            <option value="checkbox">Checkbox</option>
+          </select>
+          ${practice.mode === "number"
+            ? b`
+                <label>Unit</label>
+                <input type="text" .value=${practice.unit} @input=${(event) => this._updatePractice("unit", event.target.value)} />
+                <label>Daily Target</label>
+                <input
+                  type="number"
+                  min="1"
+                  .value=${practice.targetPerDay}
+                  @input=${(event) => this._updatePractice("targetPerDay", Number(event.target.value))}
+                />
+              `
+            : ""}
+          <label>Linked Goals</label>
+          <div class="goal-checkboxes">
+            ${this.goals.map((goal) => b`
+              <label>
+                <input
+                  type="checkbox"
+                  .checked=${practice.goalIds.includes(goal.id)}
+                  @change=${(event) => this._togglePracticeGoal(goal.id, event.target.checked)}
+                />
+                ${goal.name || "Untitled goal"}
+              </label>
+            `)}
           </div>
           <div class="modal-actions">
-            <button @click=${this._saveDailyValue}>Save</button>
-            <button class="secondary-button" @click=${this._closeDailyModal}>Cancel</button>
+            <button @click=${this._savePractice}>Save</button>
+            <button class="secondary-button" @click=${this._closePracticeModal}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderPracticeDeleteModal() {
+    const practice = this.practices.find((item) => item.id === this.confirmingPracticeDeleteId);
+    if (!practice) {
+      this.confirmingPracticeDeleteId = null;
+      return "";
+    }
+
+    return b`
+      <div class="modal" @click=${this._cancelRemovePractice}>
+        <div class="modal-content" @click=${(event) => event.stopPropagation()}>
+          <h2>Delete Practice</h2>
+          <p>Are you sure you want to delete "${practice.name}"?</p>
+          <div class="modal-actions">
+            <button class="danger-button" @click=${() => this._removePracticeImmediately(practice.id)}>Delete</button>
+            <button class="secondary-button" @click=${this._cancelRemovePractice}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderPracticeDayModal() {
+    const practice = this.practices.find((item) => item.id === this.practiceDayEdit.practiceId);
+    const goal = this.goals.find((item) => item.id === this.practiceDayEdit.goalId);
+    if (!practice || !goal) return "";
+
+    return b`
+      <div class="modal" @click=${this._closePracticeDayModal}>
+        <div class="modal-content" @click=${(event) => event.stopPropagation()}>
+          <h2>Edit Practice</h2>
+          <p>${practice.name} <strong>${this.practiceDayEdit.date}</strong></p>
+          ${practice.mode === "checkbox"
+            ? b`
+                <label>
+                  <input
+                    type="checkbox"
+                    .checked=${this.practiceDayEdit.value > 0}
+                    @change=${(event) =>
+                      (this.practiceDayEdit = {
+                        ...this.practiceDayEdit,
+                        value: event.target.checked ? 1 : 0,
+                      })}
+                  />
+                  Done
+                </label>
+              `
+            : b`
+                <label>Value (${practice.unit})</label>
+                <input
+                  type="number"
+                  min="0"
+                  .value=${this.practiceDayEdit.value}
+                  @input=${(event) =>
+                    (this.practiceDayEdit = {
+                      ...this.practiceDayEdit,
+                      value: Number(event.target.value),
+                    })}
+                />
+              `}
+          <div class="day-nav">
+            <button @click=${this._prevPracticeDay}>Previous</button>
+            <button @click=${this._setPracticeToday}>Today</button>
+            <button @click=${this._nextPracticeDay}>Next</button>
+          </div>
+          <div class="modal-actions">
+            <button @click=${this._savePracticeValue}>Save</button>
+            <button class="secondary-button" @click=${this._closePracticeDayModal}>Cancel</button>
           </div>
         </div>
       </div>
@@ -659,20 +916,55 @@ class GoalTrackerCard extends i {
     this.progressEditingGoal = null;
   }
 
-  _openDailyModal(goalId, index) {
-    const goal = this.goals.find((item) => item.id === goalId);
-    if (!goal) return;
-
-    this.dailyEdit = {
-      goalId,
-      index,
-      value: goal.daily?.[index] ?? 0,
-    };
-    this.showDailyModal = true;
+  _openAddPracticeModal() {
+    this.practiceEditing = normalizePractice({
+      id: createId(),
+      name: "",
+      mode: "number",
+      unit: "",
+      targetPerDay: 1,
+      goalIds: this.goals[0] ? [this.goals[0].id] : [],
+      entries: {},
+    });
   }
 
-  _closeDailyModal() {
-    this.showDailyModal = false;
+  _openEditPracticeModal(practice) {
+    this.practiceEditing = normalizePractice(practice);
+  }
+
+  _closePracticeModal() {
+    this.practiceEditing = null;
+  }
+
+  _updatePractice(key, value) {
+    this.practiceEditing = normalizePractice({
+      ...this.practiceEditing,
+      [key]: value,
+    }, this.practiceEditing);
+  }
+
+  _togglePracticeGoal(goalId, checked) {
+    const goalIds = checked
+      ? [...this.practiceEditing.goalIds, goalId]
+      : this.practiceEditing.goalIds.filter((item) => item !== goalId);
+    this._updatePractice("goalIds", goalIds);
+  }
+
+  _openPracticeDayModal(practiceId, goalId, date) {
+    const practice = this.practices.find((item) => item.id === practiceId);
+    if (!practice) return;
+
+    this.practiceDayEdit = {
+      practiceId,
+      goalId,
+      date,
+      value: getPracticeValueForDate(practice, date),
+    };
+    this.showPracticeDayModal = true;
+  }
+
+  _closePracticeDayModal() {
+    this.showPracticeDayModal = false;
   }
 
   async _saveGoal() {
@@ -697,6 +989,7 @@ class GoalTrackerCard extends i {
     try {
       const result = await this._callGoalTracker("delete_goal", { goal_id: goalId });
       this.goals = result.goals || [];
+      this.practices = result.practices || this.practices;
       this._clearStorageMessages();
     } catch (error) {
       this._handleBackendError(error);
@@ -715,54 +1008,84 @@ class GoalTrackerCard extends i {
     await this._setProgress(goalId, goal.progress + delta);
   }
 
-  async _saveDailyValue() {
-    const { goalId, index, value } = this.dailyEdit;
-    this._closeDailyModal();
+  async _savePractice() {
+    const practice = normalizePractice(this.practiceEditing);
+    this._closePracticeModal();
+    await this._savePracticeToBackend(practice);
+  }
+
+  _confirmRemovePractice(practiceId) {
+    this.confirmingPracticeDeleteId = practiceId;
+  }
+
+  _cancelRemovePractice() {
+    this.confirmingPracticeDeleteId = null;
+  }
+
+  async _removePracticeImmediately(practiceId) {
+    this.confirmingPracticeDeleteId = null;
     try {
-      const result = await this._callGoalTracker("set_daily_value", {
-        goal_id: goalId,
-        index,
-        value,
-      });
-      this.goals = result.goals || [];
+      const result = await this._callGoalTracker("delete_practice", { practice_id: practiceId });
+      this.goals = result.goals || this.goals;
+      this.practices = result.practices || [];
       this._clearStorageMessages();
     } catch (error) {
       this._handleBackendError(error);
     }
   }
 
-  _nextDay() {
-    const goal = this.goals.find((item) => item.id === this.dailyEdit.goalId);
-    if (!goal?.daily?.length) return;
-    const index = Math.min(this.dailyEdit.index + 1, goal.daily.length - 1);
-    this.dailyEdit = {
+  async _savePracticeValue() {
+    const { practiceId, date, value } = this.practiceDayEdit;
+    this._closePracticeDayModal();
+    try {
+      const result = await this._callGoalTracker("set_practice_value", {
+        practice_id: practiceId,
+        date,
+        value,
+      });
+      this.goals = result.goals || this.goals;
+      this.practices = result.practices || [];
+      this._clearStorageMessages();
+    } catch (error) {
+      this._handleBackendError(error);
+    }
+  }
+
+  _movePracticeDay(delta) {
+    const goal = this.goals.find((item) => item.id === this.practiceDayEdit.goalId);
+    const practice = this.practices.find((item) => item.id === this.practiceDayEdit.practiceId);
+    if (!goal || !practice) return;
+    const currentIndex = countDaysBetween(goal.start, this.practiceDayEdit.date) - 1;
+    const totalDays = countDaysBetween(goal.start, goal.end);
+    const index = Math.min(Math.max(currentIndex + delta, 0), totalDays - 1);
+    const date = addDaysIso(goal.start, index);
+    this.practiceDayEdit = {
+      practiceId: practice.id,
       goalId: goal.id,
-      index,
-      value: goal.daily[index],
+      date,
+      value: getPracticeValueForDate(practice, date),
     };
   }
 
-  _prevDay() {
-    const goal = this.goals.find((item) => item.id === this.dailyEdit.goalId);
-    if (!goal?.daily?.length) return;
-    const index = Math.max(this.dailyEdit.index - 1, 0);
-    this.dailyEdit = {
-      goalId: goal.id,
-      index,
-      value: goal.daily[index],
-    };
+  _nextPracticeDay() {
+    this._movePracticeDay(1);
   }
 
-  _setToday() {
-    const goal = this.goals.find((item) => item.id === this.dailyEdit.goalId);
-    if (!goal?.daily?.length) return;
+  _prevPracticeDay() {
+    this._movePracticeDay(-1);
+  }
+
+  _setPracticeToday() {
+    const goal = this.goals.find((item) => item.id === this.practiceDayEdit.goalId);
+    const practice = this.practices.find((item) => item.id === this.practiceDayEdit.practiceId);
+    if (!goal || !practice) return;
     const today = todayIso();
     if (today < goal.start || today > goal.end) return;
-    const index = countDaysBetween(goal.start, today) - 1;
-    this.dailyEdit = {
+    this.practiceDayEdit = {
+      practiceId: practice.id,
       goalId: goal.id,
-      index,
-      value: goal.daily[index],
+      date: today,
+      value: getPracticeValueForDate(practice, today),
     };
   }
 
@@ -775,17 +1098,22 @@ class GoalTrackerCard extends i {
         this._seededConfig = true;
       }
 
-      let result = await this._callGoalTracker("get_goals");
+      let result = await this._callGoalTracker("get_data");
       if (!this._migratedLocalStorage && (!result.goals || result.goals.length === 0)) {
-        const migratedGoals = this._readLegacyBrowserGoals();
-        if (migratedGoals.length) {
-          result = await this._callGoalTracker("seed_goals", { goals: migratedGoals });
+        const migrated = this._readLegacyBrowserData();
+        if (migrated.goals.length) {
+          await this._callGoalTracker("seed_goals", { goals: migrated.goals });
+          for (const practice of migrated.practices) {
+            await this._callGoalTracker("save_practice", { practice });
+          }
+          result = await this._callGoalTracker("get_data");
           this.storageNotice = "Imported existing browser-stored goals into Home Assistant storage.";
         }
         this._migratedLocalStorage = true;
       }
 
       this.goals = result.goals || [];
+      this.practices = result.practices || [];
       this._loaded = true;
       this.storageError = "";
     } catch (error) {
@@ -799,6 +1127,7 @@ class GoalTrackerCard extends i {
     try {
       const result = await this._callGoalTracker("save_goal", { goal });
       this.goals = result.goals || [];
+      this.practices = result.practices || this.practices;
       this._clearStorageMessages();
     } catch (error) {
       this._handleBackendError(error);
@@ -812,6 +1141,7 @@ class GoalTrackerCard extends i {
         progress,
       });
       this.goals = result.goals || [];
+      this.practices = result.practices || this.practices;
       this._clearStorageMessages();
     } catch (error) {
       this._handleBackendError(error);
@@ -828,14 +1158,28 @@ class GoalTrackerCard extends i {
     });
   }
 
-  _readLegacyBrowserGoals() {
+  async _savePracticeToBackend(practice) {
+    try {
+      const result = await this._callGoalTracker("save_practice", { practice });
+      this.goals = result.goals || this.goals;
+      this.practices = result.practices || [];
+      this._clearStorageMessages();
+    } catch (error) {
+      this._handleBackendError(error);
+    }
+  }
+
+  _readLegacyBrowserData() {
     try {
       const value = window.localStorage.getItem(this.config.storage_key || DEFAULT_STORAGE_KEY);
       const parsed = value ? parseStoredGoals(value) : null;
-      return parsed?.goals || [];
+      return {
+        goals: parsed?.goals || [],
+        practices: parsed?.practices || [],
+      };
     } catch (error) {
       console.warn("Failed to read legacy browser storage:", error);
-      return [];
+      return { goals: [], practices: [] };
     }
   }
 
@@ -851,7 +1195,7 @@ class GoalTrackerCard extends i {
   }
 
   _getCardSize() {
-    return 3 + this.goals.length;
+    return 3 + this.goals.length + this.practices.length;
   }
 
   async _addTestGoals() {
@@ -917,8 +1261,16 @@ class GoalTrackerCard extends i {
       }),
     ];
 
+    const testPractices = testGoals.map(createPracticeFromGoalDaily).filter(Boolean);
+
     for (const goal of testGoals) {
       await this._saveGoalToBackend(goal);
+    }
+    for (const practice of testPractices) {
+      await this._savePracticeToBackend({
+        ...practice,
+        name: `_TEST_ ${practice.name.replace(/^_TEST_ /, "")} Practice`,
+      });
     }
   }
 
