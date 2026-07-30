@@ -28,6 +28,4 @@ lovelace:
       icon: mdi:chart-bar
       show_in_sidebar: true
       filename: dashboards/home.yaml
-  resources:
-    - url: /goal_tracker_static/goal-tracker-card.js?v=dev-1778779426
-      type: module
+  resources: !include lovelace-resources.yaml

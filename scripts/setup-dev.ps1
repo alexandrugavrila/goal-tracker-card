@@ -17,17 +17,4 @@ foreach ($folder in $folders) {
     }
 }
 
-# Copy built custom card into the dev instance
-Write-Host ""
-Write-Host "Copying goal-tracker-card.js into the dev instance..."
-& "$PSScriptRoot\link-dev.ps1"
-
-# Start Docker in background
-Write-Host ""
-Write-Host "Starting Docker container in background..."
-
-Start-Job -ScriptBlock {
-    docker-compose -f "$using:base\docker-compose.yml" up
-} | Out-Null
-
-Write-Host "Docker container is starting in the background. Use 'Get-Job' and 'Receive-Job' to monitor."
+& "$PSScriptRoot\start-dev.ps1"

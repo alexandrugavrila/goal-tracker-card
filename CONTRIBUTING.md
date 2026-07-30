@@ -9,7 +9,7 @@
 Run commands from the repository root:
 
 ```powershell
-cd C:\_Code\goal-tracker-card
+cd C:\Workspace\projects\home-automation\cards\goal-tracker-card
 ```
 
 ## First-Time Dev Container Startup
@@ -33,9 +33,11 @@ Open the dev dashboard:
 http://localhost:8124/goal-tracker/test
 ```
 
-The start script also opens this URL automatically. If the page loads before Home Assistant has finished booting, wait 30-60 seconds and refresh.
+The start script waits for Home Assistant, creates a disposable `goal-tracker-dev` profile when the instance is clean, completes onboarding, and then opens this URL automatically.
 
-The dev instance uses trusted-network auth bypass. If Home Assistant still shows onboarding because local state was wiped, complete onboarding once, then use `.\scripts\start-dev.ps1` for normal development.
+The dev instance uses trusted-network auth bypass, so the disposable profile does not display a login prompt. The profile is only created on loopback and uses `goal-tracker-dev` as both its username and password.
+
+Pass `-NoBrowser` to `start-dev.ps1` for unattended or CI startup.
 
 The dev configuration loads the `goal_tracker` integration from `dev_instance\config\custom_components\goal_tracker`. Goal data is saved in Home Assistant `.storage`.
 
@@ -48,7 +50,7 @@ npm run build
 .\scripts\link-dev.ps1
 ```
 
-The sync script updates the Lovelace resource query string in `dev_instance\config\configuration.yaml` so Home Assistant imports a fresh card module instead of a cached `goal-tracker-card.js`.
+The sync script writes the Lovelace resource query string to the ignored `dev_instance\config\lovelace-resources.yaml` file so Home Assistant imports a fresh card module instead of a cached `goal-tracker-card.js`. The tracked `configuration.yaml` includes that generated file and remains unchanged between runs.
 
 Refresh the Home Assistant dashboard:
 
@@ -80,7 +82,7 @@ The rebuild script:
 - Pulls the latest Home Assistant image
 - Starts Docker with `--force-recreate --build`
 
-This preserves `dev_instance\config\.storage`, so onboarding, auth state, and saved Goal Tracker data remain intact. Use `.\scripts\reset-dev.ps1` only when you intentionally want to wipe local Home Assistant state.
+This preserves `dev_instance\config\.storage`, so auth state and saved Goal Tracker data remain intact. Use `.\scripts\reset-dev.ps1` only when you intentionally want to wipe local Home Assistant state; the disposable profile and onboarding state are recreated automatically.
 
 ## Publishing an Update for HACS
 
@@ -130,7 +132,7 @@ Use reset only when you intentionally want a clean Home Assistant dev instance:
 .\scripts\reset-dev.ps1
 ```
 
-This wipes `dev_instance\config\.storage`, so Home Assistant will show onboarding again. For day-to-day card development, prefer:
+This wipes `dev_instance\config\.storage`, then recreates the disposable dev profile and completes onboarding automatically. For day-to-day card development, prefer:
 
 ```powershell
 .\scripts\start-dev.ps1

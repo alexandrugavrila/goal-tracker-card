@@ -11,6 +11,7 @@ dev_instance/config/custom_components
 dev_instance/config/tts
 dev_instance/config/.HA_VERSION
 dev_instance/config/home-assistant.*
+dev_instance/config/lovelace-resources.yaml
 
 # Node / Lit Dev (optional)
 node_modules/

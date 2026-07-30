@@ -82,13 +82,19 @@ Start the local Home Assistant dev instance without resetting onboarding/auth st
 .\scripts\start-dev.ps1
 ```
 
-Then open:
+The script creates a disposable local test profile on a clean instance, completes onboarding automatically, and opens the Goal Tracker card:
 
 ```text
 http://localhost:8124/goal-tracker/test
 ```
 
-Use `.\scripts\reset-dev.ps1` only when you intentionally want to wipe the local Home Assistant state and start from a clean dev instance.
+The disposable profile uses `goal-tracker-dev` as both its username and password. It is only created on loopback and trusted-network authentication bypasses its login prompt. Use `.\scripts\reset-dev.ps1` when you intentionally want to wipe the local Home Assistant state; the test profile will be recreated automatically.
+
+For unattended startup, such as CI, suppress the browser launch:
+
+```powershell
+.\scripts\start-dev.ps1 -NoBrowser
+```
 
 ## License
 

@@ -3,6 +3,25 @@ Write-Host "Rebuilding Goal Tracker Dev environment..."
 
 $base = "$PSScriptRoot\..\dev_instance"
 $composeFile = "$base\docker-compose.yml"
+$containerName = "homeassistant-goal-tracker-card-dev"
+$expectedConfigPath = (Resolve-Path "$base\config").Path
+
+$existingContainerJson = docker inspect $containerName 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $existingContainer = $existingContainerJson | ConvertFrom-Json
+    $configMount = $existingContainer.Mounts | Where-Object { $_.Destination -eq "/config" }
+
+    if ($configMount -and $configMount.Source -ne $expectedConfigPath) {
+        Write-Host ""
+        Write-Host "Removing stale dev container mounted from:"
+        Write-Host "  $($configMount.Source)"
+        Write-Host "The config and .storage files at that location will not be removed."
+        docker rm -f $containerName | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not remove stale dev container."
+        }
+    }
+}
 
 Write-Host ""
 Write-Host "Stopping and removing Docker containers..."
@@ -39,8 +58,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "Docker compose up failed."
 }
 
+& "$PSScriptRoot\initialize-dev.ps1"
+
 Write-Host ""
 Write-Host "Home Assistant is rebuilding at:"
-Write-Host "  http://localhost:8124/goal-tracker/test"
+Write-Host "  http://localhost:8124/"
 Write-Host ""
 Write-Host "This preserves dev_instance\config\.storage. Use reset-dev.ps1 when you intentionally want to wipe local Home Assistant state."
