@@ -66,6 +66,20 @@ Run tests before committing:
 npm test
 ```
 
+## Frontend Coding Standards
+
+### Input semantics and touch keyboards
+
+Every user-editable `<input>` must declare the semantic `type` that matches the value being entered. Text and numeric inputs must also declare an appropriate `inputmode` so touchscreen operating systems and kiosk browsers can present the correct on-screen keyboard:
+
+- General text: `type="text"` with `inputmode="text"`
+- Decimal or signed measurements: `type="number"` with `inputmode="decimal"` and `step="any"`
+- Whole numbers: `type="number"` with `inputmode="numeric"` and an appropriate integer `step`
+- Dates: `type="date"` so the device can use its native date picker
+- Email, telephone, URL, password, checkbox, and other specialized values: use their corresponding HTML input type
+
+`inputmode` is a keyboard-layout hint, not validation. Continue to declare applicable `min`, `max`, and `step` constraints and validate or normalize values in application code. Do not implement a card-specific on-screen keyboard when standard inputs and the device keyboard can provide the behavior globally.
+
 ## Rebuilding the Dev Container
 
 Use this when you want to completely stop and recreate the Docker containers while preserving local Home Assistant state:
