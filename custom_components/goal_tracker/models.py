@@ -4,8 +4,15 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-STORAGE_VERSION = 2
+STORAGE_VERSION = 3
 PRACTICE_MODES = {"checkbox", "number"}
+PRACTICE_COMPARISONS = {
+    "greater_than",
+    "greater_than_or_equal",
+    "less_than",
+    "less_than_or_equal",
+    "equal",
+}
 
 
 def today_iso() -> str:
@@ -58,20 +65,23 @@ def normalize_goal(raw: dict[str, Any] | None) -> dict[str, Any]:
     start = raw.get("start") if parse_date(raw.get("start")) else today_iso()
     raw_end = raw.get("end") if parse_date(raw.get("end")) else start
     end = raw_end if count_days_between(start, raw_end) > 0 else start
-    target = sanitize_number(raw.get("target"), 1, 0)
-    target = target if target > 0 else 1
-    progress = clamp(sanitize_number(raw.get("progress"), 0, 0), 0, target)
-    days_per_week = int(clamp(round(sanitize_number(raw.get("daysPerWeek"), 5, 1)), 1, 7))
+    start_value = sanitize_number(raw.get("startValue"), 0)
+    target = sanitize_number(raw.get("target"), 1)
+    progress = clamp(
+        sanitize_number(raw.get("progress"), start_value),
+        min(start_value, target),
+        max(start_value, target),
+    )
 
     return {
         "id": raw.get("id") if isinstance(raw.get("id"), str) and raw.get("id") else str(uuid4()),
         "name": raw.get("name") if isinstance(raw.get("name"), str) else "",
         "unit": raw.get("unit") if isinstance(raw.get("unit"), str) else "",
+        "startValue": start_value,
         "target": target,
         "progress": progress,
         "start": start,
         "end": end,
-        "daysPerWeek": days_per_week,
         "daily": normalize_daily(start, end, raw.get("daily")),
     }
 
@@ -79,8 +89,38 @@ def normalize_goal(raw: dict[str, Any] | None) -> dict[str, Any]:
 def normalize_practice(raw: dict[str, Any] | None) -> dict[str, Any]:
     raw = raw or {}
     mode = raw.get("mode") if raw.get("mode") in PRACTICE_MODES else "number"
+    comparison = (
+        raw.get("comparison")
+        if raw.get("comparison") in PRACTICE_COMPARISONS
+        else "greater_than_or_equal"
+    )
     target_per_day = sanitize_number(raw.get("targetPerDay"), 1, 0)
     target_per_day = target_per_day if target_per_day > 0 else 1
+    requested_partial_progress = (
+        raw.get("partialProgressEnabled")
+        if isinstance(raw.get("partialProgressEnabled"), bool)
+        else True
+    )
+    partial_progress_enabled = comparison != "equal" and requested_partial_progress
+    raw_partial_min = sanitize_number(raw.get("partialProgressMin"), 0, 0)
+    raw_partial_max = sanitize_number(
+        raw.get("partialProgressMax"),
+        target_per_day,
+        0,
+    )
+    is_greater_comparison = comparison in {"greater_than", "greater_than_or_equal"}
+    is_less_comparison = comparison in {"less_than", "less_than_or_equal"}
+    partial_progress_min = (
+        min(raw_partial_min, target_per_day)
+        if is_greater_comparison
+        else target_per_day
+    )
+    partial_progress_max = (
+        max(raw_partial_max, target_per_day)
+        if is_less_comparison
+        else target_per_day
+    )
+    days_per_week = int(clamp(round(sanitize_number(raw.get("daysPerWeek"), 5, 1)), 1, 7))
     goal_ids = []
     for goal_id in raw.get("goalIds") if isinstance(raw.get("goalIds"), list) else []:
         if isinstance(goal_id, str) and goal_id and goal_id not in goal_ids:
@@ -100,6 +140,11 @@ def normalize_practice(raw: dict[str, Any] | None) -> dict[str, Any]:
         "mode": mode,
         "unit": raw.get("unit") if isinstance(raw.get("unit"), str) else "",
         "targetPerDay": target_per_day,
+        "comparison": comparison,
+        "partialProgressEnabled": partial_progress_enabled,
+        "partialProgressMin": partial_progress_min,
+        "partialProgressMax": partial_progress_max,
+        "daysPerWeek": days_per_week,
         "goalIds": goal_ids,
         "entries": entries,
     }
@@ -111,7 +156,7 @@ def create_practice_from_goal_daily(goal: dict[str, Any], daily: list[Any]) -> d
     normalized_daily = normalize_daily(goal["start"], goal["end"], daily)
     if not normalized_daily:
         return None
-    target_per_day = goal["target"] / len(normalized_daily) if normalized_daily else 1
+    target_per_day = abs(goal["target"] - goal["startValue"]) / len(normalized_daily) if normalized_daily else 1
     entries = {
         add_days_iso(goal["start"], index): value
         for index, value in enumerate(normalized_daily)
@@ -123,6 +168,7 @@ def create_practice_from_goal_daily(goal: dict[str, Any], daily: list[Any]) -> d
             "mode": "number",
             "unit": goal["unit"],
             "targetPerDay": max(1, target_per_day),
+            "daysPerWeek": goal.get("daysPerWeek", 5),
             "goalIds": [goal["id"]],
             "entries": entries,
         }
@@ -147,7 +193,7 @@ def unlink_goal_from_practices(
 def goal_seed_key(goal: dict[str, Any]) -> str:
     return "|".join(
         str(goal.get(key, ""))
-        for key in ("id", "name", "unit", "target", "start", "end")
+        for key in ("id", "name", "unit", "startValue", "target", "start", "end")
     )
 
 
@@ -172,7 +218,17 @@ def migrate_envelope(data: Any) -> dict[str, Any]:
         practices = [
             practice
             for goal, raw_goal in zip(goals, data, strict=False)
-            if (practice := create_practice_from_goal_daily(goal, raw_goal.get("daily") if isinstance(raw_goal, dict) else []))
+            if (
+                practice := create_practice_from_goal_daily(
+                    {
+                        **goal,
+                        "daysPerWeek": raw_goal.get("daysPerWeek", 5)
+                        if isinstance(raw_goal, dict)
+                        else 5,
+                    },
+                    raw_goal.get("daily") if isinstance(raw_goal, dict) else [],
+                )
+            )
         ]
         return create_envelope(goals, practices)
     if not isinstance(data, dict):
@@ -184,13 +240,44 @@ def migrate_envelope(data: Any) -> dict[str, Any]:
     raw_goals = data.get("goals") if isinstance(data.get("goals"), list) else []
     goals = [normalize_goal(goal) for goal in raw_goals]
     raw_practices = data.get("practices") if isinstance(data.get("practices"), list) else []
-    practices = [normalize_practice(practice) for practice in raw_practices]
-    if not raw_practices and data.get("version") != STORAGE_VERSION:
+    legacy_days_by_goal_id = {
+        goal["id"]: int(
+            clamp(
+                round(sanitize_number(raw_goal.get("daysPerWeek"), 5, 1)),
+                1,
+                7,
+            )
+        )
+        for goal, raw_goal in zip(goals, raw_goals, strict=False)
+        if isinstance(raw_goal, dict)
+    }
+    practices = [
+        normalize_practice(
+            {
+                "daysPerWeek": next(
+                    (
+                        legacy_days_by_goal_id[goal_id]
+                        for goal_id in practice.get("goalIds", [])
+                        if goal_id in legacy_days_by_goal_id
+                    ),
+                    5,
+                ),
+                **practice,
+            }
+        )
+        for practice in raw_practices
+    ]
+    if not isinstance(data.get("practices"), list):
         practices = [
             practice
             for goal, raw_goal in zip(goals, raw_goals, strict=False)
             if isinstance(raw_goal, dict)
-            if (practice := create_practice_from_goal_daily(goal, raw_goal.get("daily")))
+            if (
+                practice := create_practice_from_goal_daily(
+                    {**goal, "daysPerWeek": raw_goal.get("daysPerWeek", 5)},
+                    raw_goal.get("daily"),
+                )
+            )
         ]
     return create_envelope(goals, practices, seeded_keys)
 
@@ -229,8 +316,14 @@ def add_days_iso(start_value: str, index: int) -> str:
 
 def summary_for_goals(goals: list[dict[str, Any]]) -> dict[str, Any]:
     count = len(goals)
-    target_total = sum(sanitize_number(goal.get("target"), 0, 0) for goal in goals)
-    progress_total = sum(sanitize_number(goal.get("progress"), 0, 0) for goal in goals)
+    target_total = sum(
+        abs(sanitize_number(goal.get("target"), 0) - sanitize_number(goal.get("startValue"), 0))
+        for goal in goals
+    )
+    progress_total = sum(
+        abs(sanitize_number(goal.get("progress"), 0) - sanitize_number(goal.get("startValue"), 0))
+        for goal in goals
+    )
     completion = round((progress_total / target_total) * 100, 1) if target_total > 0 else 0
     return {
         "count": count,
@@ -242,6 +335,7 @@ def summary_for_goals(goals: list[dict[str, Any]]) -> dict[str, Any]:
                 "id": goal["id"],
                 "name": goal["name"],
                 "progress": goal["progress"],
+                "startValue": goal["startValue"],
                 "target": goal["target"],
                 "unit": goal["unit"],
             }

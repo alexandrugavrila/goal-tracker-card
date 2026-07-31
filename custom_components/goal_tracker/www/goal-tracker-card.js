@@ -25,8 +25,15 @@ const t=globalThis,i$1=t=>t,s$1=t.trustedTypes,e=s$1?s$1.createPolicy("lit-html"
  */const s=globalThis;class i extends y$1{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0;}createRenderRoot(){const t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){const r=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=D(r,this.renderRoot,this.renderOptions);}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(true);}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(false);}render(){return E}}i._$litElement$=true,i["finalized"]=true,s.litElementHydrateSupport?.({LitElement:i});const o=s.litElementPolyfillSupport;o?.({LitElement:i});(s.litElementVersions??=[]).push("4.2.2");
 
 const DEFAULT_STORAGE_KEY = "goal-tracker-card:goals";
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 const PRACTICE_MODES = ["checkbox", "number"];
+const PRACTICE_COMPARISONS = [
+  "greater_than",
+  "greater_than_or_equal",
+  "less_than",
+  "less_than_or_equal",
+  "equal",
+];
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -106,30 +113,63 @@ function normalizeGoal(raw = {}, fallback = {}) {
   const start = parseDate(raw.start) ? raw.start : fallback.start ?? todayIso();
   const rawEnd = parseDate(raw.end) ? raw.end : fallback.end ?? start;
   const end = countDaysBetween(start, rawEnd) > 0 ? rawEnd : start;
-  const target = sanitizeNumber(raw.target, fallback.target ?? 1, 0);
-  const safeTarget = target > 0 ? target : 1;
+  const startValue = sanitizeNumber(raw.startValue, fallback.startValue ?? 0);
+  const target = sanitizeNumber(raw.target, fallback.target ?? 1);
   const daily = generateDailyArray(start, end, Array.isArray(raw.daily) ? raw.daily : []);
-  const progress = clamp(sanitizeNumber(raw.progress, fallback.progress ?? 0, 0), 0, safeTarget);
+  const progress = clamp(
+    sanitizeNumber(raw.progress, fallback.progress ?? startValue),
+    Math.min(startValue, target),
+    Math.max(startValue, target)
+  );
 
   return {
     id: typeof raw.id === "string" && raw.id ? raw.id : createId(),
     name: typeof raw.name === "string" ? raw.name : fallback.name ?? "",
     unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
-    target: safeTarget,
+    startValue,
+    target,
     progress,
     start,
     end,
-    daysPerWeek: clamp(Math.round(sanitizeNumber(raw.daysPerWeek, fallback.daysPerWeek ?? 5, 1)), 1, 7),
     daily,
   };
 }
 
 function normalizePractice(raw = {}, fallback = {}) {
   const mode = PRACTICE_MODES.includes(raw.mode) ? raw.mode : fallback.mode ?? "number";
+  const comparison = PRACTICE_COMPARISONS.includes(raw.comparison)
+    ? raw.comparison
+    : PRACTICE_COMPARISONS.includes(fallback.comparison)
+      ? fallback.comparison
+      : "greater_than_or_equal";
   const rawGoalIds = Array.isArray(raw.goalIds) ? raw.goalIds : fallback.goalIds ?? [];
   const goalIds = [...new Set(rawGoalIds.filter((goalId) => typeof goalId === "string" && goalId))];
   const target = sanitizeNumber(raw.targetPerDay, fallback.targetPerDay ?? 1, 0);
   const targetPerDay = target > 0 ? target : 1;
+  const requestedPartialProgress = typeof raw.partialProgressEnabled === "boolean"
+    ? raw.partialProgressEnabled
+    : typeof fallback.partialProgressEnabled === "boolean"
+      ? fallback.partialProgressEnabled
+      : true;
+  const partialProgressEnabled = comparison !== "equal" && requestedPartialProgress;
+  const rawPartialMin = sanitizeNumber(
+    raw.partialProgressMin,
+    fallback.partialProgressMin ?? 0,
+    0
+  );
+  const rawPartialMax = sanitizeNumber(
+    raw.partialProgressMax,
+    fallback.partialProgressMax ?? targetPerDay,
+    0
+  );
+  const isGreaterComparison = comparison === "greater_than" || comparison === "greater_than_or_equal";
+  const isLessComparison = comparison === "less_than" || comparison === "less_than_or_equal";
+  const partialProgressMin = isGreaterComparison
+    ? Math.min(rawPartialMin, targetPerDay)
+    : targetPerDay;
+  const partialProgressMax = isLessComparison
+    ? Math.max(rawPartialMax, targetPerDay)
+    : targetPerDay;
   const sourceEntries = raw.entries && typeof raw.entries === "object" ? raw.entries : fallback.entries ?? {};
   const entries = {};
 
@@ -145,6 +185,15 @@ function normalizePractice(raw = {}, fallback = {}) {
     mode,
     unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
     targetPerDay,
+    comparison,
+    partialProgressEnabled,
+    partialProgressMin,
+    partialProgressMax,
+    daysPerWeek: clamp(
+      Math.round(sanitizeNumber(raw.daysPerWeek, fallback.daysPerWeek ?? 5, 1)),
+      1,
+      7
+    ),
     goalIds,
     entries,
   };
@@ -164,7 +213,8 @@ function createPracticeFromGoalDaily(goal) {
     name: normalizedGoal.name,
     mode: "number",
     unit: normalizedGoal.unit,
-    targetPerDay: Math.max(1, normalizedGoal.target / daily.length),
+    targetPerDay: Math.max(1, Math.abs(normalizedGoal.target - normalizedGoal.startValue) / daily.length),
+    daysPerWeek: goal.daysPerWeek,
     goalIds: [normalizedGoal.id],
     entries,
   });
@@ -186,11 +236,24 @@ function parseStoredGoals(state) {
 
     if (parsed && typeof parsed === "object" && Array.isArray(parsed.goals)) {
       const goals = parsed.goals.map((goal) => normalizeGoal(goal));
-      const practices = Array.isArray(parsed.practices) && parsed.practices.length
-        ? parsed.practices.map((practice) => normalizePractice(practice))
-        : parsed.version !== STORAGE_VERSION
-          ? parsed.goals.map(createPracticeFromGoalDaily).filter(Boolean)
-          : [];
+      const legacyDaysByGoalId = new Map(
+        parsed.goals.map((goal, index) => [
+          goals[index].id,
+          clamp(Math.round(sanitizeNumber(goal?.daysPerWeek, 5, 1)), 1, 7),
+        ])
+      );
+      const practices = Array.isArray(parsed.practices)
+        ? parsed.practices.map((practice) =>
+            normalizePractice(
+              practice,
+              {
+                daysPerWeek: practice.goalIds
+                  ?.map((goalId) => legacyDaysByGoalId.get(goalId))
+                  .find((value) => value !== undefined) ?? 5,
+              }
+            )
+          )
+        : parsed.goals.map(createPracticeFromGoalDaily).filter(Boolean);
       return {
         version: STORAGE_VERSION,
         goals,
@@ -225,10 +288,12 @@ function createStorageEnvelope(goals = [], practices = [], seededConfigKeys = []
 }
 
 function getProgressPercent(goal) {
-  const target = sanitizeNumber(goal?.target, 0, 0);
-  if (target <= 0) return 0;
-  const progress = sanitizeNumber(goal?.progress, 0, 0);
-  return clamp((progress / target) * 100, 0, 100);
+  const startValue = sanitizeNumber(goal?.startValue, 0);
+  const target = sanitizeNumber(goal?.target, 1);
+  const progress = sanitizeNumber(goal?.progress, startValue);
+  const distance = target - startValue;
+  if (distance === 0) return progress === target ? 100 : 0;
+  return clamp(((progress - startValue) / distance) * 100, 0, 100);
 }
 
 function getExpectedProgressPercent(goal, nowValue = new Date()) {
@@ -253,18 +318,67 @@ function getPracticeValueForDate(practice, dateKey) {
 }
 
 function isPracticeCompleteForDate(practice, dateKey) {
+  if (!practice?.entries || !Object.prototype.hasOwnProperty.call(practice.entries, dateKey)) {
+    return false;
+  }
   const value = getPracticeValueForDate(practice, dateKey);
   if (practice?.mode === "checkbox") return value > 0;
-  return value >= sanitizeNumber(practice?.targetPerDay, 1, 0);
+  const target = sanitizeNumber(practice?.targetPerDay, 1, 0);
+  switch (practice?.comparison) {
+    case "greater_than":
+      return value > target;
+    case "less_than":
+      return value < target;
+    case "less_than_or_equal":
+      return value <= target;
+    case "equal":
+      return value === target;
+    case "greater_than_or_equal":
+    default:
+      return value >= target;
+  }
+}
+
+function isPracticePartialForDate(practice, dateKey) {
+  if (
+    practice?.mode !== "number" ||
+    !practice?.partialProgressEnabled ||
+    !practice?.entries ||
+    !Object.prototype.hasOwnProperty.call(practice.entries, dateKey) ||
+    isPracticeCompleteForDate(practice, dateKey)
+  ) {
+    return false;
+  }
+
+  const value = getPracticeValueForDate(practice, dateKey);
+  if (value === 0) return false;
+  const minimum = sanitizeNumber(practice.partialProgressMin, 0, 0);
+  const maximum = sanitizeNumber(practice.partialProgressMax, practice.targetPerDay, 0);
+  return value >= Math.min(minimum, maximum) && value <= Math.max(minimum, maximum);
 }
 
 function getPracticeDayColor(practice, dateKey, nowValue = new Date()) {
   if (!dateKey || dateKey > toIsoDate(nowValue)) return "#eee";
-  const value = getPracticeValueForDate(practice, dateKey);
-  if (value === 0) return "#e74c3c";
   if (isPracticeCompleteForDate(practice, dateKey)) return "#2ecc71";
-  return "#f1c40f";
+  if (isPracticePartialForDate(practice, dateKey)) return "#f1c40f";
+  return "#e74c3c";
 }
+
+const PRACTICE_COMPARISON_LABELS = {
+  greater_than: "Greater than (>)",
+  greater_than_or_equal: "Greater than or equal to (≥)",
+  less_than: "Less than (<)",
+  less_than_or_equal: "Less than or equal to (≤)",
+  equal: "Equal to (=)",
+};
+
+const PRACTICE_COMPARISON_SYMBOLS = {
+  greater_than: ">",
+  greater_than_or_equal: "≥",
+  less_than: "<",
+  less_than_or_equal: "≤",
+  equal: "=",
+};
 
 class GoalTrackerCard extends i {
   static properties = {
@@ -315,6 +429,13 @@ class GoalTrackerCard extends i {
       font-weight: 700;
       flex: 1;
       min-width: 0;
+    }
+
+    .goal-values {
+      color: var(--secondary-text-color, #666);
+      font-size: 13px;
+      font-weight: 400;
+      margin-top: 2px;
     }
 
     .goal-actions {
@@ -484,7 +605,9 @@ class GoalTrackerCard extends i {
       color: var(--primary-text-color, #000);
       padding: 20px;
       border-radius: 8px;
-      max-width: 320px;
+      max-height: calc(100vh - 32px);
+      max-width: 520px;
+      overflow-y: auto;
       width: 100%;
       box-sizing: border-box;
     }
@@ -514,6 +637,74 @@ class GoalTrackerCard extends i {
       box-sizing: border-box;
     }
 
+    .toggle-label {
+      display: flex !important;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .toggle-label.disabled {
+      color: var(--disabled-text-color, #999);
+      opacity: 0.7;
+    }
+
+    .field-label-with-help {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 10px 0 4px;
+    }
+
+    .field-label-with-help label {
+      margin: 0;
+    }
+
+    .help-tooltip {
+      align-items: center;
+      background: var(--secondary-background-color, #eee);
+      border: 1px solid var(--divider-color, #bbb);
+      border-radius: 50%;
+      color: var(--primary-text-color, #333);
+      cursor: help;
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 700;
+      height: 17px;
+      justify-content: center;
+      position: relative;
+      width: 17px;
+    }
+
+    .help-tooltip-content {
+      background: var(--card-background-color, #fff);
+      border: 1px solid var(--divider-color, #bbb);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      color: var(--primary-text-color, #222);
+      display: none;
+      font-size: 12px;
+      font-weight: 400;
+      left: -8px;
+      line-height: 1.4;
+      padding: 10px;
+      position: absolute;
+      top: calc(100% + 6px);
+      width: min(300px, calc(100vw - 72px));
+      z-index: 20;
+    }
+
+    .help-tooltip:hover .help-tooltip-content,
+    .help-tooltip:focus .help-tooltip-content,
+    .help-tooltip:focus-within .help-tooltip-content {
+      display: block;
+    }
+
+    .field-hint {
+      color: var(--secondary-text-color, #666);
+      font-size: 12px;
+      margin: 4px 0 0;
+    }
+
     .goal-checkboxes {
       display: flex;
       flex-direction: column;
@@ -539,6 +730,7 @@ class GoalTrackerCard extends i {
       gap: 8px;
       margin-top: 12px;
     }
+
   `;
 
   constructor() {
@@ -620,7 +812,13 @@ class GoalTrackerCard extends i {
     return b`
       <div class="goal-row">
         <div class="goal-header">
-          <div class="goal-title">${goal.name} (${goal.progress}/${goal.target} ${goal.unit})</div>
+          <div class="goal-title">
+            ${goal.name}
+            <div class="goal-values">
+              Start ${goal.startValue} · Current ${goal.progress} · Target ${goal.target}
+              ${goal.unit}
+            </div>
+          </div>
           <div class="goal-actions">
             <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, -1)}>-1</button>
             <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, 1)}>+1</button>
@@ -652,12 +850,17 @@ class GoalTrackerCard extends i {
   _renderPracticeForGoal(goal, practice, totalDays) {
     const targetLabel = practice.mode === "checkbox"
       ? "done / missed"
-      : `${practice.targetPerDay} ${practice.unit || "units"}/day`;
+      : `${PRACTICE_COMPARISON_SYMBOLS[practice.comparison] || "≥"} ${practice.targetPerDay} ${practice.unit || "units"}/day`;
+    const partialLabel = practice.mode === "number" && practice.partialProgressEnabled
+      ? `, partial ${practice.partialProgressMin}–${practice.partialProgressMax}`
+      : "";
 
     return b`
       <div class="practice-row">
         <div class="practice-header">
-          <div class="practice-title">${practice.name || "Practice"} (${targetLabel})</div>
+          <div class="practice-title">
+            ${practice.name || "Practice"} (${targetLabel}${partialLabel}, ${practice.daysPerWeek} days/week)
+          </div>
           <div class="practice-actions">
             <button class="set-button" @click=${() => this._openEditPracticeModal(practice)}>Edit</button>
             <button class="delete-button" @click=${() => this._confirmRemovePractice(practice.id)}>Delete</button>
@@ -689,17 +892,47 @@ class GoalTrackerCard extends i {
         <div class="modal-content" @click=${(event) => event.stopPropagation()}>
           <h2>New Goal</h2>
           <label>Name</label>
-          <input type="text" .value=${this.newGoal.name} @input=${(event) => this._updateNewGoal("name", event.target.value)} />
+          <input
+            type="text"
+            inputmode="text"
+            .value=${this.newGoal.name}
+            @input=${(event) => this._updateNewGoal("name", event.target.value)}
+          />
           <label>Unit</label>
-          <input type="text" .value=${this.newGoal.unit} @input=${(event) => this._updateNewGoal("unit", event.target.value)} />
-          <label>Target</label>
-          <input type="number" min="1" .value=${this.newGoal.target} @input=${(event) => this._updateNewGoal("target", Number(event.target.value))} />
-          <label>Starting Progress</label>
-          <input type="number" min="0" .value=${this.newGoal.progress} @input=${(event) => this._updateNewGoal("progress", Number(event.target.value))} />
+          <input
+            type="text"
+            inputmode="text"
+            .value=${this.newGoal.unit}
+            @input=${(event) => this._updateNewGoal("unit", event.target.value)}
+          />
+          <label>Starting Value</label>
+          <input
+            type="number"
+            inputmode="decimal"
+            step="any"
+            .value=${this.newGoal.startValue}
+            @input=${(event) => this._updateNewGoal("startValue", this._numberInputValue(event.target.value))}
+          />
+          <label>Current Value</label>
+          <input
+            type="number"
+            inputmode="decimal"
+            step="any"
+            .value=${this.newGoal.progress}
+            @input=${(event) => this._updateNewGoal("progress", this._numberInputValue(event.target.value))}
+          />
+          <label>Target Value</label>
+          <input
+            type="number"
+            inputmode="decimal"
+            step="any"
+            .value=${this.newGoal.target}
+            @input=${(event) => this._updateNewGoal("target", this._numberInputValue(event.target.value))}
+          />
+          <label>Start Date</label>
+          <input type="date" .value=${this.newGoal.start} @input=${(event) => this._updateNewGoal("start", event.target.value)} />
           <label>End Date</label>
           <input type="date" .value=${this.newGoal.end} @input=${(event) => this._updateNewGoal("end", event.target.value)} />
-          <label>Days/Week</label>
-          <input type="number" min="1" max="7" .value=${this.newGoal.daysPerWeek} @input=${(event) => this._updateNewGoal("daysPerWeek", Number(event.target.value))} />
           <div class="modal-actions">
             <button @click=${this._saveGoal}>Save</button>
             <button class="secondary-button" @click=${this._closeAddModal}>Cancel</button>
@@ -739,12 +972,15 @@ class GoalTrackerCard extends i {
           <label>Progress (${this.progressEditingGoal.unit})</label>
           <input
             type="number"
-            min="0"
+            inputmode="decimal"
+            step="any"
+            min=${Math.min(this.progressEditingGoal.startValue, this.progressEditingGoal.target)}
+            max=${Math.max(this.progressEditingGoal.startValue, this.progressEditingGoal.target)}
             .value=${this.progressEditingGoal.progress}
             @input=${(event) =>
               (this.progressEditingGoal = {
                 ...this.progressEditingGoal,
-                progress: Number(event.target.value),
+                progress: this._numberInputValue(event.target.value),
               })}
           />
           <div class="modal-actions">
@@ -758,6 +994,11 @@ class GoalTrackerCard extends i {
 
   _renderPracticeModal() {
     const practice = this.practiceEditing;
+    const isEqualComparison = practice.comparison === "equal";
+    const isGreaterComparison =
+      practice.comparison === "greater_than" || practice.comparison === "greater_than_or_equal";
+    const isLessComparison =
+      practice.comparison === "less_than" || practice.comparison === "less_than_or_equal";
 
     return b`
       <div class="modal" @click=${this._closePracticeModal}>
@@ -766,6 +1007,7 @@ class GoalTrackerCard extends i {
           <label>Name</label>
           <input
             type="text"
+            inputmode="text"
             .value=${practice.name}
             @input=${(event) => this._updatePractice("name", event.target.value)}
           />
@@ -777,16 +1019,103 @@ class GoalTrackerCard extends i {
           ${practice.mode === "number"
             ? b`
                 <label>Unit</label>
-                <input type="text" .value=${practice.unit} @input=${(event) => this._updatePractice("unit", event.target.value)} />
+                <input
+                  type="text"
+                  inputmode="text"
+                  .value=${practice.unit}
+                  @input=${(event) => this._updatePractice("unit", event.target.value)}
+                />
                 <label>Daily Target</label>
                 <input
                   type="number"
+                  inputmode="decimal"
+                  step="any"
                   min="1"
                   .value=${practice.targetPerDay}
-                  @input=${(event) => this._updatePractice("targetPerDay", Number(event.target.value))}
+                  @input=${(event) => this._updatePractice("targetPerDay", this._numberInputValue(event.target.value))}
                 />
+                <div class="field-label-with-help">
+                  <label>Target Comparison</label>
+                  <span class="help-tooltip" tabindex="0" aria-label="Target comparison help">
+                    ?
+                    <span class="help-tooltip-content" role="tooltip">
+                      Target Comparison defines what counts as successful. Greater than means you
+                      want to exceed the stated target value. Less than means you want to stay below
+                      the stated target value. The inclusive options also count the target itself as
+                      successful, while Equal to requires the logged value to match the target.
+                    </span>
+                  </span>
+                </div>
+                <select
+                  .value=${practice.comparison}
+                  @change=${(event) => this._updatePractice("comparison", event.target.value)}
+                >
+                  ${PRACTICE_COMPARISONS.map((comparison) => b`
+                    <option value=${comparison}>${PRACTICE_COMPARISON_LABELS[comparison]}</option>
+                  `)}
+                </select>
+                <label class="toggle-label ${isEqualComparison ? "disabled" : ""}">
+                  <input
+                    type="checkbox"
+                    .checked=${!isEqualComparison && practice.partialProgressEnabled}
+                    .disabled=${isEqualComparison}
+                    @change=${(event) => this._updatePractice("partialProgressEnabled", event.target.checked)}
+                  />
+                  Enable partial progress
+                </label>
+                ${!isEqualComparison && practice.partialProgressEnabled
+                  ? b`
+                      ${isGreaterComparison
+                        ? b`
+                            <label>Partial Minimum</label>
+                            <input
+                              class="partial-bound"
+                              type="number"
+                              inputmode="decimal"
+                              step="any"
+                              min="0"
+                              max=${practice.targetPerDay}
+                              required
+                              .value=${practice.partialProgressMin}
+                              @input=${(event) => this._updatePractice("partialProgressMin", this._numberInputValue(event.target.value))}
+                            />
+                            <p class="field-hint">
+                              Required. Partial progress runs from this minimum up to the target.
+                            </p>
+                          `
+                        : ""}
+                      ${isLessComparison
+                        ? b`
+                            <label>Partial Maximum</label>
+                            <input
+                              class="partial-bound"
+                              type="number"
+                              inputmode="decimal"
+                              step="any"
+                              min=${practice.targetPerDay}
+                              required
+                              .value=${practice.partialProgressMax}
+                              @input=${(event) => this._updatePractice("partialProgressMax", this._numberInputValue(event.target.value))}
+                            />
+                            <p class="field-hint">
+                              Required. Partial progress runs from the target up to this maximum.
+                            </p>
+                          `
+                        : ""}
+                    `
+                  : ""}
               `
             : ""}
+          <label>Days/Week</label>
+          <input
+            type="number"
+            inputmode="numeric"
+            step="1"
+            min="1"
+            max="7"
+            .value=${practice.daysPerWeek}
+            @input=${(event) => this._updatePractice("daysPerWeek", this._numberInputValue(event.target.value))}
+          />
           <label>Linked Goals</label>
           <div class="goal-checkboxes">
             ${this.goals.map((goal) => b`
@@ -859,12 +1188,14 @@ class GoalTrackerCard extends i {
                 <label>Value (${practice.unit})</label>
                 <input
                   type="number"
+                  inputmode="decimal"
+                  step="any"
                   min="0"
                   .value=${this.practiceDayEdit.value}
                   @input=${(event) =>
                     (this.practiceDayEdit = {
                       ...this.practiceDayEdit,
-                      value: Number(event.target.value),
+                      value: this._numberInputValue(event.target.value),
                     })}
                 />
               `}
@@ -888,11 +1219,11 @@ class GoalTrackerCard extends i {
       id: createId(),
       name: "",
       unit: "",
+      startValue: 0,
       target: 1,
       progress: 0,
       start,
       end: start,
-      daysPerWeek: 5,
     };
     this.showModal = true;
   }
@@ -902,9 +1233,14 @@ class GoalTrackerCard extends i {
   }
 
   _updateNewGoal(key, value) {
+    const shouldSyncProgress =
+      key === "startValue" &&
+      (this.newGoal.progress === this.newGoal.startValue || this.newGoal.progress === "");
     this.newGoal = {
       ...this.newGoal,
       [key]: value,
+      ...(shouldSyncProgress ? { progress: value } : {}),
+      ...(key === "start" && this.newGoal.end < value ? { end: value } : {}),
     };
   }
 
@@ -923,6 +1259,11 @@ class GoalTrackerCard extends i {
       mode: "number",
       unit: "",
       targetPerDay: 1,
+      comparison: "greater_than_or_equal",
+      partialProgressEnabled: true,
+      partialProgressMin: 0,
+      partialProgressMax: 1,
+      daysPerWeek: 5,
       goalIds: this.goals[0] ? [this.goals[0].id] : [],
       entries: {},
     });
@@ -937,10 +1278,54 @@ class GoalTrackerCard extends i {
   }
 
   _updatePractice(key, value) {
-    this.practiceEditing = normalizePractice({
+    const updatedPractice = {
       ...this.practiceEditing,
       [key]: value,
-    }, this.practiceEditing);
+    };
+
+    if (key === "comparison") {
+      if (value === "equal") {
+        updatedPractice.partialProgressEnabled = false;
+        updatedPractice.partialProgressMin = updatedPractice.targetPerDay;
+        updatedPractice.partialProgressMax = updatedPractice.targetPerDay;
+      } else if (value === "greater_than" || value === "greater_than_or_equal") {
+        updatedPractice.partialProgressMax = updatedPractice.targetPerDay;
+      } else {
+        updatedPractice.partialProgressMin = updatedPractice.targetPerDay;
+      }
+    }
+
+    if (key === "targetPerDay") {
+      const target = Number(value);
+      if (Number.isFinite(target)) {
+        if (
+          updatedPractice.comparison === "greater_than" ||
+          updatedPractice.comparison === "greater_than_or_equal"
+        ) {
+          updatedPractice.partialProgressMax = value;
+          if (Number(updatedPractice.partialProgressMin) > target) {
+            updatedPractice.partialProgressMin = value;
+          }
+        } else if (
+          updatedPractice.comparison === "less_than" ||
+          updatedPractice.comparison === "less_than_or_equal"
+        ) {
+          updatedPractice.partialProgressMin = value;
+          if (Number(updatedPractice.partialProgressMax) < target) {
+            updatedPractice.partialProgressMax = value;
+          }
+        } else {
+          updatedPractice.partialProgressMin = value;
+          updatedPractice.partialProgressMax = value;
+        }
+      }
+    }
+
+    this.practiceEditing = updatedPractice;
+  }
+
+  _numberInputValue(value) {
+    return String(value);
   }
 
   _togglePracticeGoal(goalId, checked) {
@@ -972,7 +1357,7 @@ class GoalTrackerCard extends i {
       ...this.newGoal,
       daily: generateDailyArray(this.newGoal.start, this.newGoal.end),
     });
-    this.showModal = false;
+    this._closeAddModal();
     await this._saveGoalToBackend(goal);
   }
 
@@ -1009,6 +1394,11 @@ class GoalTrackerCard extends i {
   }
 
   async _savePractice() {
+    const partialBound = this.shadowRoot?.querySelector(".partial-bound");
+    if (partialBound && !partialBound.checkValidity()) {
+      partialBound.reportValidity();
+      return;
+    }
     const practice = normalizePractice(this.practiceEditing);
     this._closePracticeModal();
     await this._savePracticeToBackend(practice);
@@ -1244,7 +1634,6 @@ class GoalTrackerCard extends i {
         target: 50,
         start: runStartStr,
         end: runEndStr,
-        daysPerWeek: 4,
         daily: runDaily,
         progress: runDaily.reduce((sum, value) => sum + value, 0),
       }),
@@ -1255,7 +1644,6 @@ class GoalTrackerCard extends i {
         target: 300,
         start: todayStr,
         end: readEndStr,
-        daysPerWeek: 5,
         daily: readDaily,
         progress: readDaily.reduce((sum, value) => sum + value, 0),
       }),

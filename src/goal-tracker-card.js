@@ -1,6 +1,7 @@
 import { LitElement, html, css } from "lit";
 import {
   DEFAULT_STORAGE_KEY,
+  PRACTICE_COMPARISONS,
   addDaysIso,
   countDaysBetween,
   createId,
@@ -17,6 +18,22 @@ import {
   todayIso,
   toIsoDate,
 } from "./goal-utils.js";
+
+const PRACTICE_COMPARISON_LABELS = {
+  greater_than: "Greater than (>)",
+  greater_than_or_equal: "Greater than or equal to (≥)",
+  less_than: "Less than (<)",
+  less_than_or_equal: "Less than or equal to (≤)",
+  equal: "Equal to (=)",
+};
+
+const PRACTICE_COMPARISON_SYMBOLS = {
+  greater_than: ">",
+  greater_than_or_equal: "≥",
+  less_than: "<",
+  less_than_or_equal: "≤",
+  equal: "=",
+};
 
 class GoalTrackerCard extends LitElement {
   static properties = {
@@ -67,6 +84,13 @@ class GoalTrackerCard extends LitElement {
       font-weight: 700;
       flex: 1;
       min-width: 0;
+    }
+
+    .goal-values {
+      color: var(--secondary-text-color, #666);
+      font-size: 13px;
+      font-weight: 400;
+      margin-top: 2px;
     }
 
     .goal-actions {
@@ -236,7 +260,9 @@ class GoalTrackerCard extends LitElement {
       color: var(--primary-text-color, #000);
       padding: 20px;
       border-radius: 8px;
-      max-width: 320px;
+      max-height: calc(100vh - 32px);
+      max-width: 520px;
+      overflow-y: auto;
       width: 100%;
       box-sizing: border-box;
     }
@@ -266,6 +292,74 @@ class GoalTrackerCard extends LitElement {
       box-sizing: border-box;
     }
 
+    .toggle-label {
+      display: flex !important;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .toggle-label.disabled {
+      color: var(--disabled-text-color, #999);
+      opacity: 0.7;
+    }
+
+    .field-label-with-help {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 10px 0 4px;
+    }
+
+    .field-label-with-help label {
+      margin: 0;
+    }
+
+    .help-tooltip {
+      align-items: center;
+      background: var(--secondary-background-color, #eee);
+      border: 1px solid var(--divider-color, #bbb);
+      border-radius: 50%;
+      color: var(--primary-text-color, #333);
+      cursor: help;
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 700;
+      height: 17px;
+      justify-content: center;
+      position: relative;
+      width: 17px;
+    }
+
+    .help-tooltip-content {
+      background: var(--card-background-color, #fff);
+      border: 1px solid var(--divider-color, #bbb);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      color: var(--primary-text-color, #222);
+      display: none;
+      font-size: 12px;
+      font-weight: 400;
+      left: -8px;
+      line-height: 1.4;
+      padding: 10px;
+      position: absolute;
+      top: calc(100% + 6px);
+      width: min(300px, calc(100vw - 72px));
+      z-index: 20;
+    }
+
+    .help-tooltip:hover .help-tooltip-content,
+    .help-tooltip:focus .help-tooltip-content,
+    .help-tooltip:focus-within .help-tooltip-content {
+      display: block;
+    }
+
+    .field-hint {
+      color: var(--secondary-text-color, #666);
+      font-size: 12px;
+      margin: 4px 0 0;
+    }
+
     .goal-checkboxes {
       display: flex;
       flex-direction: column;
@@ -291,6 +385,7 @@ class GoalTrackerCard extends LitElement {
       gap: 8px;
       margin-top: 12px;
     }
+
   `;
 
   constructor() {
@@ -372,7 +467,13 @@ class GoalTrackerCard extends LitElement {
     return html`
       <div class="goal-row">
         <div class="goal-header">
-          <div class="goal-title">${goal.name} (${goal.progress}/${goal.target} ${goal.unit})</div>
+          <div class="goal-title">
+            ${goal.name}
+            <div class="goal-values">
+              Start ${goal.startValue} · Current ${goal.progress} · Target ${goal.target}
+              ${goal.unit}
+            </div>
+          </div>
           <div class="goal-actions">
             <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, -1)}>-1</button>
             <button class="adjust-button" @click=${() => this._incrementProgress(goal.id, 1)}>+1</button>
@@ -404,12 +505,17 @@ class GoalTrackerCard extends LitElement {
   _renderPracticeForGoal(goal, practice, totalDays) {
     const targetLabel = practice.mode === "checkbox"
       ? "done / missed"
-      : `${practice.targetPerDay} ${practice.unit || "units"}/day`;
+      : `${PRACTICE_COMPARISON_SYMBOLS[practice.comparison] || "≥"} ${practice.targetPerDay} ${practice.unit || "units"}/day`;
+    const partialLabel = practice.mode === "number" && practice.partialProgressEnabled
+      ? `, partial ${practice.partialProgressMin}–${practice.partialProgressMax}`
+      : "";
 
     return html`
       <div class="practice-row">
         <div class="practice-header">
-          <div class="practice-title">${practice.name || "Practice"} (${targetLabel})</div>
+          <div class="practice-title">
+            ${practice.name || "Practice"} (${targetLabel}${partialLabel}, ${practice.daysPerWeek} days/week)
+          </div>
           <div class="practice-actions">
             <button class="set-button" @click=${() => this._openEditPracticeModal(practice)}>Edit</button>
             <button class="delete-button" @click=${() => this._confirmRemovePractice(practice.id)}>Delete</button>
@@ -441,17 +547,47 @@ class GoalTrackerCard extends LitElement {
         <div class="modal-content" @click=${(event) => event.stopPropagation()}>
           <h2>New Goal</h2>
           <label>Name</label>
-          <input type="text" .value=${this.newGoal.name} @input=${(event) => this._updateNewGoal("name", event.target.value)} />
+          <input
+            type="text"
+            inputmode="text"
+            .value=${this.newGoal.name}
+            @input=${(event) => this._updateNewGoal("name", event.target.value)}
+          />
           <label>Unit</label>
-          <input type="text" .value=${this.newGoal.unit} @input=${(event) => this._updateNewGoal("unit", event.target.value)} />
-          <label>Target</label>
-          <input type="number" min="1" .value=${this.newGoal.target} @input=${(event) => this._updateNewGoal("target", Number(event.target.value))} />
-          <label>Starting Progress</label>
-          <input type="number" min="0" .value=${this.newGoal.progress} @input=${(event) => this._updateNewGoal("progress", Number(event.target.value))} />
+          <input
+            type="text"
+            inputmode="text"
+            .value=${this.newGoal.unit}
+            @input=${(event) => this._updateNewGoal("unit", event.target.value)}
+          />
+          <label>Starting Value</label>
+          <input
+            type="number"
+            inputmode="decimal"
+            step="any"
+            .value=${this.newGoal.startValue}
+            @input=${(event) => this._updateNewGoal("startValue", this._numberInputValue(event.target.value))}
+          />
+          <label>Current Value</label>
+          <input
+            type="number"
+            inputmode="decimal"
+            step="any"
+            .value=${this.newGoal.progress}
+            @input=${(event) => this._updateNewGoal("progress", this._numberInputValue(event.target.value))}
+          />
+          <label>Target Value</label>
+          <input
+            type="number"
+            inputmode="decimal"
+            step="any"
+            .value=${this.newGoal.target}
+            @input=${(event) => this._updateNewGoal("target", this._numberInputValue(event.target.value))}
+          />
+          <label>Start Date</label>
+          <input type="date" .value=${this.newGoal.start} @input=${(event) => this._updateNewGoal("start", event.target.value)} />
           <label>End Date</label>
           <input type="date" .value=${this.newGoal.end} @input=${(event) => this._updateNewGoal("end", event.target.value)} />
-          <label>Days/Week</label>
-          <input type="number" min="1" max="7" .value=${this.newGoal.daysPerWeek} @input=${(event) => this._updateNewGoal("daysPerWeek", Number(event.target.value))} />
           <div class="modal-actions">
             <button @click=${this._saveGoal}>Save</button>
             <button class="secondary-button" @click=${this._closeAddModal}>Cancel</button>
@@ -491,12 +627,15 @@ class GoalTrackerCard extends LitElement {
           <label>Progress (${this.progressEditingGoal.unit})</label>
           <input
             type="number"
-            min="0"
+            inputmode="decimal"
+            step="any"
+            min=${Math.min(this.progressEditingGoal.startValue, this.progressEditingGoal.target)}
+            max=${Math.max(this.progressEditingGoal.startValue, this.progressEditingGoal.target)}
             .value=${this.progressEditingGoal.progress}
             @input=${(event) =>
               (this.progressEditingGoal = {
                 ...this.progressEditingGoal,
-                progress: Number(event.target.value),
+                progress: this._numberInputValue(event.target.value),
               })}
           />
           <div class="modal-actions">
@@ -510,6 +649,11 @@ class GoalTrackerCard extends LitElement {
 
   _renderPracticeModal() {
     const practice = this.practiceEditing;
+    const isEqualComparison = practice.comparison === "equal";
+    const isGreaterComparison =
+      practice.comparison === "greater_than" || practice.comparison === "greater_than_or_equal";
+    const isLessComparison =
+      practice.comparison === "less_than" || practice.comparison === "less_than_or_equal";
 
     return html`
       <div class="modal" @click=${this._closePracticeModal}>
@@ -518,6 +662,7 @@ class GoalTrackerCard extends LitElement {
           <label>Name</label>
           <input
             type="text"
+            inputmode="text"
             .value=${practice.name}
             @input=${(event) => this._updatePractice("name", event.target.value)}
           />
@@ -529,16 +674,103 @@ class GoalTrackerCard extends LitElement {
           ${practice.mode === "number"
             ? html`
                 <label>Unit</label>
-                <input type="text" .value=${practice.unit} @input=${(event) => this._updatePractice("unit", event.target.value)} />
+                <input
+                  type="text"
+                  inputmode="text"
+                  .value=${practice.unit}
+                  @input=${(event) => this._updatePractice("unit", event.target.value)}
+                />
                 <label>Daily Target</label>
                 <input
                   type="number"
+                  inputmode="decimal"
+                  step="any"
                   min="1"
                   .value=${practice.targetPerDay}
-                  @input=${(event) => this._updatePractice("targetPerDay", Number(event.target.value))}
+                  @input=${(event) => this._updatePractice("targetPerDay", this._numberInputValue(event.target.value))}
                 />
+                <div class="field-label-with-help">
+                  <label>Target Comparison</label>
+                  <span class="help-tooltip" tabindex="0" aria-label="Target comparison help">
+                    ?
+                    <span class="help-tooltip-content" role="tooltip">
+                      Target Comparison defines what counts as successful. Greater than means you
+                      want to exceed the stated target value. Less than means you want to stay below
+                      the stated target value. The inclusive options also count the target itself as
+                      successful, while Equal to requires the logged value to match the target.
+                    </span>
+                  </span>
+                </div>
+                <select
+                  .value=${practice.comparison}
+                  @change=${(event) => this._updatePractice("comparison", event.target.value)}
+                >
+                  ${PRACTICE_COMPARISONS.map((comparison) => html`
+                    <option value=${comparison}>${PRACTICE_COMPARISON_LABELS[comparison]}</option>
+                  `)}
+                </select>
+                <label class="toggle-label ${isEqualComparison ? "disabled" : ""}">
+                  <input
+                    type="checkbox"
+                    .checked=${!isEqualComparison && practice.partialProgressEnabled}
+                    .disabled=${isEqualComparison}
+                    @change=${(event) => this._updatePractice("partialProgressEnabled", event.target.checked)}
+                  />
+                  Enable partial progress
+                </label>
+                ${!isEqualComparison && practice.partialProgressEnabled
+                  ? html`
+                      ${isGreaterComparison
+                        ? html`
+                            <label>Partial Minimum</label>
+                            <input
+                              class="partial-bound"
+                              type="number"
+                              inputmode="decimal"
+                              step="any"
+                              min="0"
+                              max=${practice.targetPerDay}
+                              required
+                              .value=${practice.partialProgressMin}
+                              @input=${(event) => this._updatePractice("partialProgressMin", this._numberInputValue(event.target.value))}
+                            />
+                            <p class="field-hint">
+                              Required. Partial progress runs from this minimum up to the target.
+                            </p>
+                          `
+                        : ""}
+                      ${isLessComparison
+                        ? html`
+                            <label>Partial Maximum</label>
+                            <input
+                              class="partial-bound"
+                              type="number"
+                              inputmode="decimal"
+                              step="any"
+                              min=${practice.targetPerDay}
+                              required
+                              .value=${practice.partialProgressMax}
+                              @input=${(event) => this._updatePractice("partialProgressMax", this._numberInputValue(event.target.value))}
+                            />
+                            <p class="field-hint">
+                              Required. Partial progress runs from the target up to this maximum.
+                            </p>
+                          `
+                        : ""}
+                    `
+                  : ""}
               `
             : ""}
+          <label>Days/Week</label>
+          <input
+            type="number"
+            inputmode="numeric"
+            step="1"
+            min="1"
+            max="7"
+            .value=${practice.daysPerWeek}
+            @input=${(event) => this._updatePractice("daysPerWeek", this._numberInputValue(event.target.value))}
+          />
           <label>Linked Goals</label>
           <div class="goal-checkboxes">
             ${this.goals.map((goal) => html`
@@ -611,12 +843,14 @@ class GoalTrackerCard extends LitElement {
                 <label>Value (${practice.unit})</label>
                 <input
                   type="number"
+                  inputmode="decimal"
+                  step="any"
                   min="0"
                   .value=${this.practiceDayEdit.value}
                   @input=${(event) =>
                     (this.practiceDayEdit = {
                       ...this.practiceDayEdit,
-                      value: Number(event.target.value),
+                      value: this._numberInputValue(event.target.value),
                     })}
                 />
               `}
@@ -640,11 +874,11 @@ class GoalTrackerCard extends LitElement {
       id: createId(),
       name: "",
       unit: "",
+      startValue: 0,
       target: 1,
       progress: 0,
       start,
       end: start,
-      daysPerWeek: 5,
     };
     this.showModal = true;
   }
@@ -654,9 +888,14 @@ class GoalTrackerCard extends LitElement {
   }
 
   _updateNewGoal(key, value) {
+    const shouldSyncProgress =
+      key === "startValue" &&
+      (this.newGoal.progress === this.newGoal.startValue || this.newGoal.progress === "");
     this.newGoal = {
       ...this.newGoal,
       [key]: value,
+      ...(shouldSyncProgress ? { progress: value } : {}),
+      ...(key === "start" && this.newGoal.end < value ? { end: value } : {}),
     };
   }
 
@@ -675,6 +914,11 @@ class GoalTrackerCard extends LitElement {
       mode: "number",
       unit: "",
       targetPerDay: 1,
+      comparison: "greater_than_or_equal",
+      partialProgressEnabled: true,
+      partialProgressMin: 0,
+      partialProgressMax: 1,
+      daysPerWeek: 5,
       goalIds: this.goals[0] ? [this.goals[0].id] : [],
       entries: {},
     });
@@ -689,10 +933,54 @@ class GoalTrackerCard extends LitElement {
   }
 
   _updatePractice(key, value) {
-    this.practiceEditing = normalizePractice({
+    const updatedPractice = {
       ...this.practiceEditing,
       [key]: value,
-    }, this.practiceEditing);
+    };
+
+    if (key === "comparison") {
+      if (value === "equal") {
+        updatedPractice.partialProgressEnabled = false;
+        updatedPractice.partialProgressMin = updatedPractice.targetPerDay;
+        updatedPractice.partialProgressMax = updatedPractice.targetPerDay;
+      } else if (value === "greater_than" || value === "greater_than_or_equal") {
+        updatedPractice.partialProgressMax = updatedPractice.targetPerDay;
+      } else {
+        updatedPractice.partialProgressMin = updatedPractice.targetPerDay;
+      }
+    }
+
+    if (key === "targetPerDay") {
+      const target = Number(value);
+      if (Number.isFinite(target)) {
+        if (
+          updatedPractice.comparison === "greater_than" ||
+          updatedPractice.comparison === "greater_than_or_equal"
+        ) {
+          updatedPractice.partialProgressMax = value;
+          if (Number(updatedPractice.partialProgressMin) > target) {
+            updatedPractice.partialProgressMin = value;
+          }
+        } else if (
+          updatedPractice.comparison === "less_than" ||
+          updatedPractice.comparison === "less_than_or_equal"
+        ) {
+          updatedPractice.partialProgressMin = value;
+          if (Number(updatedPractice.partialProgressMax) < target) {
+            updatedPractice.partialProgressMax = value;
+          }
+        } else {
+          updatedPractice.partialProgressMin = value;
+          updatedPractice.partialProgressMax = value;
+        }
+      }
+    }
+
+    this.practiceEditing = updatedPractice;
+  }
+
+  _numberInputValue(value) {
+    return String(value);
   }
 
   _togglePracticeGoal(goalId, checked) {
@@ -724,7 +1012,7 @@ class GoalTrackerCard extends LitElement {
       ...this.newGoal,
       daily: generateDailyArray(this.newGoal.start, this.newGoal.end),
     });
-    this.showModal = false;
+    this._closeAddModal();
     await this._saveGoalToBackend(goal);
   }
 
@@ -761,6 +1049,11 @@ class GoalTrackerCard extends LitElement {
   }
 
   async _savePractice() {
+    const partialBound = this.shadowRoot?.querySelector(".partial-bound");
+    if (partialBound && !partialBound.checkValidity()) {
+      partialBound.reportValidity();
+      return;
+    }
     const practice = normalizePractice(this.practiceEditing);
     this._closePracticeModal();
     await this._savePracticeToBackend(practice);

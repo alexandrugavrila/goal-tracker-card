@@ -43,7 +43,22 @@ class GoalTrackerModelTests(unittest.TestCase):
 
         self.assertEqual(goal["progress"], 10)
         self.assertEqual(goal["daily"], [1, 0, 0])
-        self.assertEqual(goal["daysPerWeek"], 7)
+        self.assertNotIn("daysPerWeek", goal)
+
+    def test_normalize_goal_supports_decreasing_values(self):
+        goal = normalize_goal(
+            {
+                "startValue": 240,
+                "target": 220,
+                "progress": 230,
+                "start": "2026-05-13",
+                "end": "2026-06-13",
+            }
+        )
+
+        self.assertEqual(goal["startValue"], 240)
+        self.assertEqual(goal["target"], 220)
+        self.assertEqual(goal["progress"], 230)
 
     def test_migrates_old_frontend_envelope_keys(self):
         envelope = migrate_envelope(
@@ -78,19 +93,21 @@ class GoalTrackerModelTests(unittest.TestCase):
                         "progress": 10,
                         "start": "2026-05-13",
                         "end": "2026-05-14",
+                        "daysPerWeek": 4,
                         "daily": [5, 10],
                     }
                 ],
             }
         )
 
-        self.assertEqual(envelope["version"], 2)
+        self.assertEqual(envelope["version"], 3)
         self.assertEqual(len(envelope["practices"]), 1)
         practice = envelope["practices"][0]
         self.assertEqual(practice["name"], "Read")
         self.assertEqual(practice["mode"], "number")
         self.assertEqual(practice["unit"], "pages")
         self.assertEqual(practice["targetPerDay"], 50)
+        self.assertEqual(practice["daysPerWeek"], 4)
         self.assertEqual(practice["goalIds"], ["goal-1"])
         self.assertEqual(practice["entries"], {"2026-05-13": 5, "2026-05-14": 10})
 
@@ -132,8 +149,62 @@ class GoalTrackerModelTests(unittest.TestCase):
 
         self.assertEqual(checkbox["mode"], "checkbox")
         self.assertEqual(checkbox["targetPerDay"], 1)
+        self.assertEqual(checkbox["comparison"], "greater_than_or_equal")
+        self.assertTrue(checkbox["partialProgressEnabled"])
+        self.assertEqual(checkbox["partialProgressMin"], 0)
+        self.assertEqual(checkbox["partialProgressMax"], 1)
+        self.assertEqual(checkbox["daysPerWeek"], 5)
         self.assertEqual(checkbox["goalIds"], ["goal-1"])
         self.assertEqual(checkbox["entries"], {"2026-05-13": 1, "2026-05-14": 0})
+
+    def test_normalize_practice_supports_comparison_and_partial_range(self):
+        practice = normalize_practice(
+            {
+                "mode": "number",
+                "targetPerDay": 2000,
+                "comparison": "less_than_or_equal",
+                "partialProgressEnabled": False,
+                "partialProgressMin": 1000,
+                "partialProgressMax": 2200,
+            }
+        )
+
+        self.assertEqual(practice["comparison"], "less_than_or_equal")
+        self.assertFalse(practice["partialProgressEnabled"])
+        self.assertEqual(practice["partialProgressMin"], 2000)
+        self.assertEqual(practice["partialProgressMax"], 2200)
+
+    def test_normalize_practice_anchors_partial_range_for_greater_comparison(self):
+        practice = normalize_practice(
+            {
+                "mode": "number",
+                "targetPerDay": 10,
+                "comparison": "greater_than",
+                "partialProgressEnabled": True,
+                "partialProgressMin": 4,
+                "partialProgressMax": 99,
+            }
+        )
+
+        self.assertTrue(practice["partialProgressEnabled"])
+        self.assertEqual(practice["partialProgressMin"], 4)
+        self.assertEqual(practice["partialProgressMax"], 10)
+
+    def test_normalize_practice_disables_partial_progress_for_equality(self):
+        practice = normalize_practice(
+            {
+                "mode": "number",
+                "targetPerDay": 10,
+                "comparison": "equal",
+                "partialProgressEnabled": True,
+                "partialProgressMin": 4,
+                "partialProgressMax": 14,
+            }
+        )
+
+        self.assertFalse(practice["partialProgressEnabled"])
+        self.assertEqual(practice["partialProgressMin"], 10)
+        self.assertEqual(practice["partialProgressMax"], 10)
 
     def test_unlink_goal_from_practices_removes_deleted_goal_id(self):
         practices = [
@@ -186,6 +257,28 @@ class GoalTrackerModelTests(unittest.TestCase):
         self.assertEqual(summary["completion"], 25)
         self.assertEqual(summary["goals"][0]["name"], "Read")
         self.assertNotIn("daily", summary["goals"][0])
+
+    def test_summary_counts_progress_toward_decreasing_target(self):
+        summary = summary_for_goals(
+            [
+                normalize_goal(
+                    {
+                        "id": "goal-1",
+                        "name": "Weight",
+                        "unit": "lb",
+                        "startValue": 240,
+                        "target": 220,
+                        "progress": 230,
+                        "start": "2026-05-13",
+                        "end": "2026-06-13",
+                    }
+                )
+            ]
+        )
+
+        self.assertEqual(summary["progress_total"], 10)
+        self.assertEqual(summary["target_total"], 20)
+        self.assertEqual(summary["completion"], 50)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,13 @@
 export const DEFAULT_STORAGE_KEY = "goal-tracker-card:goals";
-export const STORAGE_VERSION = 2;
+export const STORAGE_VERSION = 3;
 export const PRACTICE_MODES = ["checkbox", "number"];
+export const PRACTICE_COMPARISONS = [
+  "greater_than",
+  "greater_than_or_equal",
+  "less_than",
+  "less_than_or_equal",
+  "equal",
+];
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -80,30 +87,63 @@ export function normalizeGoal(raw = {}, fallback = {}) {
   const start = parseDate(raw.start) ? raw.start : fallback.start ?? todayIso();
   const rawEnd = parseDate(raw.end) ? raw.end : fallback.end ?? start;
   const end = countDaysBetween(start, rawEnd) > 0 ? rawEnd : start;
-  const target = sanitizeNumber(raw.target, fallback.target ?? 1, 0);
-  const safeTarget = target > 0 ? target : 1;
+  const startValue = sanitizeNumber(raw.startValue, fallback.startValue ?? 0);
+  const target = sanitizeNumber(raw.target, fallback.target ?? 1);
   const daily = generateDailyArray(start, end, Array.isArray(raw.daily) ? raw.daily : []);
-  const progress = clamp(sanitizeNumber(raw.progress, fallback.progress ?? 0, 0), 0, safeTarget);
+  const progress = clamp(
+    sanitizeNumber(raw.progress, fallback.progress ?? startValue),
+    Math.min(startValue, target),
+    Math.max(startValue, target)
+  );
 
   return {
     id: typeof raw.id === "string" && raw.id ? raw.id : createId(),
     name: typeof raw.name === "string" ? raw.name : fallback.name ?? "",
     unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
-    target: safeTarget,
+    startValue,
+    target,
     progress,
     start,
     end,
-    daysPerWeek: clamp(Math.round(sanitizeNumber(raw.daysPerWeek, fallback.daysPerWeek ?? 5, 1)), 1, 7),
     daily,
   };
 }
 
 export function normalizePractice(raw = {}, fallback = {}) {
   const mode = PRACTICE_MODES.includes(raw.mode) ? raw.mode : fallback.mode ?? "number";
+  const comparison = PRACTICE_COMPARISONS.includes(raw.comparison)
+    ? raw.comparison
+    : PRACTICE_COMPARISONS.includes(fallback.comparison)
+      ? fallback.comparison
+      : "greater_than_or_equal";
   const rawGoalIds = Array.isArray(raw.goalIds) ? raw.goalIds : fallback.goalIds ?? [];
   const goalIds = [...new Set(rawGoalIds.filter((goalId) => typeof goalId === "string" && goalId))];
   const target = sanitizeNumber(raw.targetPerDay, fallback.targetPerDay ?? 1, 0);
   const targetPerDay = target > 0 ? target : 1;
+  const requestedPartialProgress = typeof raw.partialProgressEnabled === "boolean"
+    ? raw.partialProgressEnabled
+    : typeof fallback.partialProgressEnabled === "boolean"
+      ? fallback.partialProgressEnabled
+      : true;
+  const partialProgressEnabled = comparison !== "equal" && requestedPartialProgress;
+  const rawPartialMin = sanitizeNumber(
+    raw.partialProgressMin,
+    fallback.partialProgressMin ?? 0,
+    0
+  );
+  const rawPartialMax = sanitizeNumber(
+    raw.partialProgressMax,
+    fallback.partialProgressMax ?? targetPerDay,
+    0
+  );
+  const isGreaterComparison = comparison === "greater_than" || comparison === "greater_than_or_equal";
+  const isLessComparison = comparison === "less_than" || comparison === "less_than_or_equal";
+  const partialProgressMin = isGreaterComparison
+    ? Math.min(rawPartialMin, targetPerDay)
+    : targetPerDay;
+  const partialProgressMax = isLessComparison
+    ? Math.max(rawPartialMax, targetPerDay)
+    : targetPerDay;
   const sourceEntries = raw.entries && typeof raw.entries === "object" ? raw.entries : fallback.entries ?? {};
   const entries = {};
 
@@ -119,6 +159,15 @@ export function normalizePractice(raw = {}, fallback = {}) {
     mode,
     unit: typeof raw.unit === "string" ? raw.unit : fallback.unit ?? "",
     targetPerDay,
+    comparison,
+    partialProgressEnabled,
+    partialProgressMin,
+    partialProgressMax,
+    daysPerWeek: clamp(
+      Math.round(sanitizeNumber(raw.daysPerWeek, fallback.daysPerWeek ?? 5, 1)),
+      1,
+      7
+    ),
     goalIds,
     entries,
   };
@@ -138,7 +187,8 @@ export function createPracticeFromGoalDaily(goal) {
     name: normalizedGoal.name,
     mode: "number",
     unit: normalizedGoal.unit,
-    targetPerDay: Math.max(1, normalizedGoal.target / daily.length),
+    targetPerDay: Math.max(1, Math.abs(normalizedGoal.target - normalizedGoal.startValue) / daily.length),
+    daysPerWeek: goal.daysPerWeek,
     goalIds: [normalizedGoal.id],
     entries,
   });
@@ -149,6 +199,7 @@ export function goalSeedKey(goal) {
     goal.id || "",
     goal.name || "",
     goal.unit || "",
+    goal.startValue ?? "",
     goal.target ?? "",
     goal.start || "",
     goal.end || "",
@@ -171,11 +222,24 @@ export function parseStoredGoals(state) {
 
     if (parsed && typeof parsed === "object" && Array.isArray(parsed.goals)) {
       const goals = parsed.goals.map((goal) => normalizeGoal(goal));
-      const practices = Array.isArray(parsed.practices) && parsed.practices.length
-        ? parsed.practices.map((practice) => normalizePractice(practice))
-        : parsed.version !== STORAGE_VERSION
-          ? parsed.goals.map(createPracticeFromGoalDaily).filter(Boolean)
-          : [];
+      const legacyDaysByGoalId = new Map(
+        parsed.goals.map((goal, index) => [
+          goals[index].id,
+          clamp(Math.round(sanitizeNumber(goal?.daysPerWeek, 5, 1)), 1, 7),
+        ])
+      );
+      const practices = Array.isArray(parsed.practices)
+        ? parsed.practices.map((practice) =>
+            normalizePractice(
+              practice,
+              {
+                daysPerWeek: practice.goalIds
+                  ?.map((goalId) => legacyDaysByGoalId.get(goalId))
+                  .find((value) => value !== undefined) ?? 5,
+              }
+            )
+          )
+        : parsed.goals.map(createPracticeFromGoalDaily).filter(Boolean);
       return {
         version: STORAGE_VERSION,
         goals,
@@ -248,10 +312,12 @@ export function serializeStorage(goals, seededConfigKeys = [], practices = []) {
 }
 
 export function getProgressPercent(goal) {
-  const target = sanitizeNumber(goal?.target, 0, 0);
-  if (target <= 0) return 0;
-  const progress = sanitizeNumber(goal?.progress, 0, 0);
-  return clamp((progress / target) * 100, 0, 100);
+  const startValue = sanitizeNumber(goal?.startValue, 0);
+  const target = sanitizeNumber(goal?.target, 1);
+  const progress = sanitizeNumber(goal?.progress, startValue);
+  const distance = target - startValue;
+  if (distance === 0) return progress === target ? 100 : 0;
+  return clamp(((progress - startValue) / distance) * 100, 0, 100);
 }
 
 export function getExpectedProgressPercent(goal, nowValue = new Date()) {
@@ -277,7 +343,9 @@ export function getDayColor(goal, index, nowValue = new Date()) {
   const value = sanitizeNumber(goal.daily?.[index], 0, 0);
   if (value === 0) return "#e74c3c";
 
-  const expectedPerDay = goal.daily?.length ? goal.target / goal.daily.length : goal.target;
+  const expectedPerDay = goal.daily?.length
+    ? Math.abs(goal.target - (goal.startValue ?? 0)) / goal.daily.length
+    : Math.abs(goal.target - (goal.startValue ?? 0));
   if (expectedPerDay > 0 && value < expectedPerDay) return "#f1c40f";
   return "#2ecc71";
 }
@@ -288,15 +356,48 @@ export function getPracticeValueForDate(practice, dateKey) {
 }
 
 export function isPracticeCompleteForDate(practice, dateKey) {
+  if (!practice?.entries || !Object.prototype.hasOwnProperty.call(practice.entries, dateKey)) {
+    return false;
+  }
   const value = getPracticeValueForDate(practice, dateKey);
   if (practice?.mode === "checkbox") return value > 0;
-  return value >= sanitizeNumber(practice?.targetPerDay, 1, 0);
+  const target = sanitizeNumber(practice?.targetPerDay, 1, 0);
+  switch (practice?.comparison) {
+    case "greater_than":
+      return value > target;
+    case "less_than":
+      return value < target;
+    case "less_than_or_equal":
+      return value <= target;
+    case "equal":
+      return value === target;
+    case "greater_than_or_equal":
+    default:
+      return value >= target;
+  }
+}
+
+export function isPracticePartialForDate(practice, dateKey) {
+  if (
+    practice?.mode !== "number" ||
+    !practice?.partialProgressEnabled ||
+    !practice?.entries ||
+    !Object.prototype.hasOwnProperty.call(practice.entries, dateKey) ||
+    isPracticeCompleteForDate(practice, dateKey)
+  ) {
+    return false;
+  }
+
+  const value = getPracticeValueForDate(practice, dateKey);
+  if (value === 0) return false;
+  const minimum = sanitizeNumber(practice.partialProgressMin, 0, 0);
+  const maximum = sanitizeNumber(practice.partialProgressMax, practice.targetPerDay, 0);
+  return value >= Math.min(minimum, maximum) && value <= Math.max(minimum, maximum);
 }
 
 export function getPracticeDayColor(practice, dateKey, nowValue = new Date()) {
   if (!dateKey || dateKey > toIsoDate(nowValue)) return "#eee";
-  const value = getPracticeValueForDate(practice, dateKey);
-  if (value === 0) return "#e74c3c";
   if (isPracticeCompleteForDate(practice, dateKey)) return "#2ecc71";
-  return "#f1c40f";
+  if (isPracticePartialForDate(practice, dateKey)) return "#f1c40f";
+  return "#e74c3c";
 }
