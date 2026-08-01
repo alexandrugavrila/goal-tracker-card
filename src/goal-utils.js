@@ -8,6 +8,12 @@ export const PRACTICE_COMPARISONS = [
   "less_than_or_equal",
   "equal",
 ];
+export const PRACTICE_DAY_COLORS = {
+  complete: "#2ecc71",
+  partial: "#f1c40f",
+  missed: "#e74c3c",
+  future: "#eee",
+};
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -396,8 +402,12 @@ export function isPracticePartialForDate(practice, dateKey) {
 }
 
 export function getPracticeDayColor(practice, dateKey, nowValue = new Date()) {
-  if (!dateKey || dateKey > toIsoDate(nowValue)) return "#eee";
-  if (isPracticeCompleteForDate(practice, dateKey)) return "#2ecc71";
-  if (isPracticePartialForDate(practice, dateKey)) return "#f1c40f";
-  return "#e74c3c";
+  return PRACTICE_DAY_COLORS[getPracticeDayStatus(practice, dateKey, nowValue)];
+}
+
+export function getPracticeDayStatus(practice, dateKey, nowValue = new Date()) {
+  if (!dateKey || dateKey > toIsoDate(nowValue)) return "future";
+  if (isPracticeCompleteForDate(practice, dateKey)) return "complete";
+  if (isPracticePartialForDate(practice, dateKey)) return "partial";
+  return "missed";
 }
