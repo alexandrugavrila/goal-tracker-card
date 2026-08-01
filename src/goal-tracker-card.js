@@ -8,16 +8,26 @@ import {
   createPracticeFromGoalDaily,
   generateDailyArray,
   getExpectedProgressPercent,
-  getPracticeDayColor,
   getPracticeValueForDate,
   getProgressPercent,
-  isTodayForGoalIndex,
   normalizeGoal,
   normalizePractice,
   parseStoredGoals,
   todayIso,
   toIsoDate,
 } from "./goal-utils.js";
+import {
+  PRACTICE_BLOCK_GAP,
+  PRACTICE_BLOCK_MIN_WIDTH,
+  PRACTICE_EXPANSION_GROUP_PADDING,
+  createPracticeTimeline,
+  formatPracticeBlockLabel,
+  formatPracticeBlockSummary,
+  getNextFinerTimelineUnit,
+  getPracticeBlockAppearance,
+  getTimelineBlockHeight,
+  getTimelineExpansionGroups,
+} from "./practice-timeline.js";
 
 const PRACTICE_COMPARISON_LABELS = {
   greater_than: "Greater than (>)",
@@ -51,6 +61,8 @@ class GoalTrackerCard extends LitElement {
     showPracticeDayModal: { state: true },
     storageError: { state: true },
     storageNotice: { state: true },
+    timelineWidths: { state: true },
+    timelineSelections: { state: true },
   };
 
   static styles = css`
@@ -122,20 +134,75 @@ class GoalTrackerCard extends LitElement {
       z-index: 2;
     }
 
-    .day-indicators {
+    .practice-timeline {
+      overflow-x: auto;
+      padding: ${PRACTICE_EXPANSION_GROUP_PADDING}px;
+      scrollbar-width: thin;
+    }
+
+    .timeline-context {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+      margin-top: 6px;
+      color: var(--secondary-text-color, #666);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .timeline-overview {
+      flex: 0 0 auto;
+      padding: 1px 6px;
+      border: 1px solid var(--divider-color, #ccc);
+      border-radius: 999px;
+      color: var(--primary-text-color, #222);
+      font-weight: 600;
+    }
+
+    .timeline-expanded {
+      min-width: 0;
+    }
+
+    .timeline-grid {
       display: grid;
-      gap: 5px;
+      align-items: end;
+      gap: ${PRACTICE_BLOCK_GAP}px;
       margin-top: 8px;
     }
 
-    .day {
-      height: 20px;
-      background: #eee;
+    .timeline-block {
+      box-sizing: border-box;
+      grid-row: 1;
+      min-width: ${PRACTICE_BLOCK_MIN_WIDTH}px;
+      padding: 0;
+      border: 0;
       border-radius: 4px;
+      cursor: pointer;
+      position: relative;
+      z-index: 1;
     }
 
-    .day.today {
+    .timeline-expansion-outline {
+      align-self: end;
+      box-sizing: border-box;
+      grid-row: 1;
+      margin: 0 -${PRACTICE_EXPANSION_GROUP_PADDING - 1}px -${PRACTICE_EXPANSION_GROUP_PADDING}px;
+      pointer-events: none;
+      border: 1px solid rgba(127, 127, 127, 0.5);
+      border-color: color-mix(in srgb, var(--primary-text-color, #000) 38%, transparent);
+      border-radius: 6px;
+      z-index: 2;
+    }
+
+    .timeline-block.current {
       outline: 2px solid var(--primary-text-color, #000);
+      outline-offset: 1px;
+      z-index: 3;
+    }
+
+    .timeline-block.selected:not(.current) {
+      outline: 2px solid var(--primary-color, #3498db);
       outline-offset: 1px;
     }
 
@@ -408,10 +475,37 @@ class GoalTrackerCard extends LitElement {
     this.showPracticeDayModal = false;
     this.storageError = "";
     this.storageNotice = "";
+    this.timelineWidths = {};
+    this.timelineSelections = {};
     this._loaded = false;
     this._loadingGoals = false;
     this._seededConfig = false;
     this._migratedLocalStorage = false;
+    this._timelineResizeObserver = null;
+    this._observedTimelines = new Set();
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    if (!this._timelineResizeObserver && globalThis.ResizeObserver) {
+      this._timelineResizeObserver = new ResizeObserver((entries) => {
+        let nextWidths = this.timelineWidths;
+        for (const entry of entries) {
+          const timelineKey = entry.target.dataset.timelineKey;
+          const width = Math.floor(entry.contentRect.width);
+          if (!timelineKey || width <= 0 || this.timelineWidths[timelineKey] === width) continue;
+          if (nextWidths === this.timelineWidths) nextWidths = { ...this.timelineWidths };
+          nextWidths[timelineKey] = width;
+        }
+        if (nextWidths !== this.timelineWidths) this.timelineWidths = nextWidths;
+      });
+    }
+  }
+
+  disconnectedCallback() {
+    this._timelineResizeObserver?.disconnect();
+    this._observedTimelines.clear();
+    super.disconnectedCallback();
   }
 
   setConfig(config) {
@@ -430,6 +524,7 @@ class GoalTrackerCard extends LitElement {
     if ((changed.has("hass") || changed.has("config")) && !this._loaded) {
       this._loadGoals();
     }
+    this._syncTimelineObservers();
   }
 
   render() {
@@ -461,7 +556,6 @@ class GoalTrackerCard extends LitElement {
   }
 
   _renderGoal(goal) {
-    const totalDays = countDaysBetween(goal.start, goal.end);
     const linkedPractices = this.practices.filter((practice) => practice.goalIds.includes(goal.id));
 
     return html`
@@ -494,7 +588,7 @@ class GoalTrackerCard extends LitElement {
         ${linkedPractices.length
           ? html`
               <div class="practice-list">
-                ${linkedPractices.map((practice) => this._renderPracticeForGoal(goal, practice, totalDays))}
+                ${linkedPractices.map((practice) => this._renderPracticeForGoal(goal, practice))}
               </div>
             `
           : html`<div class="practice-empty">No linked practices.</div>`}
@@ -502,13 +596,31 @@ class GoalTrackerCard extends LitElement {
     `;
   }
 
-  _renderPracticeForGoal(goal, practice, totalDays) {
+  _renderPracticeForGoal(goal, practice) {
     const targetLabel = practice.mode === "checkbox"
       ? "done / missed"
       : `${PRACTICE_COMPARISON_SYMBOLS[practice.comparison] || "≥"} ${practice.targetPerDay} ${practice.unit || "units"}/day`;
     const partialLabel = practice.mode === "number" && practice.partialProgressEnabled
       ? `, partial ${practice.partialProgressMin}–${practice.partialProgressMax}`
       : "";
+    const timelineKey = `${goal.id}::${practice.id}`;
+    const timelineWidth = this.timelineWidths[timelineKey] || 600;
+    const now = new Date();
+    const timeline = createPracticeTimeline({
+      start: goal.start,
+      end: goal.end,
+      availableWidth: timelineWidth,
+      selection: this.timelineSelections[timelineKey],
+      nowValue: now,
+    });
+    const minimumGridWidth = Math.max(
+      0,
+      timeline.blocks.length * (PRACTICE_BLOCK_MIN_WIDTH + PRACTICE_BLOCK_GAP) - PRACTICE_BLOCK_GAP
+    );
+    const overviewUnit = `${timeline.baseUnit[0].toUpperCase()}${timeline.baseUnit.slice(1)}`;
+    const expandedPath = timeline.expandedBlocks.map(formatPracticeBlockLabel).join(" › ");
+    const expandedUnit = `${timeline.deepestUnit}s`;
+    const expansionGroups = getTimelineExpansionGroups(timeline);
 
     return html`
       <div class="practice-row">
@@ -521,24 +633,111 @@ class GoalTrackerCard extends LitElement {
             <button class="delete-button" @click=${() => this._confirmRemovePractice(practice.id)}>Delete</button>
           </div>
         </div>
-        <div class="day-indicators" style="grid-template-columns: repeat(${Math.max(totalDays, 1)}, 1fr);">
-          ${Array.from({ length: totalDays }, (_, i) => {
-            const dateKey = addDaysIso(goal.start, i);
-            const value = getPracticeValueForDate(practice, dateKey);
-            const unit = practice.mode === "checkbox" ? (value > 0 ? "done" : "missed") : `${value} ${practice.unit}`;
-            const tooltip = `${dateKey}: ${unit}`;
-            return html`
+        <div class="timeline-context" aria-live="polite">
+          <span class="timeline-overview">${overviewUnit} overview</span>
+          <span class="timeline-expanded">
+            ${expandedPath
+              ? html`Expanded: ${expandedPath} → ${expandedUnit}`
+              : "All days shown"}
+          </span>
+        </div>
+        <div
+          class="practice-timeline"
+          data-timeline-key=${timelineKey}
+          aria-label="${practice.name || "Practice"} progress timeline"
+        >
+          <div
+            class="timeline-grid"
+            style="
+              grid-template-columns: repeat(${Math.max(timeline.blocks.length, 1)}, minmax(${PRACTICE_BLOCK_MIN_WIDTH}px, 1fr));
+              min-width: ${minimumGridWidth}px;
+            "
+          >
+            ${timeline.blocks.map((block, index) =>
+              this._renderPracticeTimelineBlock(
+                goal,
+                practice,
+                timelineKey,
+                block,
+                timeline.largestUnit,
+                index + 1,
+                now
+              )
+            )}
+            ${expansionGroups.map((group) => html`
               <div
-                class="day ${isTodayForGoalIndex(goal, i) ? "today" : ""}"
-                style="background:${getPracticeDayColor(practice, dateKey)}; cursor: pointer;"
-                title="${tooltip}"
-                @click=${() => this._openPracticeDayModal(practice.id, goal.id, dateKey)}
+                class="timeline-expansion-outline"
+                style="
+                  grid-column: ${group.columnStart} / span ${group.columnSpan};
+                  height: ${group.height}px;
+                "
+                aria-hidden="true"
               ></div>
-            `;
-          })}
+            `)}
+          </div>
         </div>
       </div>
     `;
+  }
+
+  _renderPracticeTimelineBlock(goal, practice, timelineKey, block, largestUnit, column, now) {
+    const appearance = getPracticeBlockAppearance(practice, block, now);
+    const isDay = block.unit === "day";
+    const finerUnit = getNextFinerTimelineUnit(block.unit);
+    const value = isDay ? getPracticeValueForDate(practice, block.start) : 0;
+    const dayValue = appearance.counts.future === 1
+      ? "future"
+      : practice.mode === "checkbox"
+        ? (value > 0 ? "done" : "missed")
+        : `${value} ${practice.unit}`;
+    const summary = isDay
+      ? `${block.start}: ${dayValue}`
+      : formatPracticeBlockSummary(block, appearance.counts);
+    const tooltip = finerUnit ? `${summary}. Click to expand to ${finerUnit}s.` : summary;
+    const blockHeight = getTimelineBlockHeight(block.unit, largestUnit);
+
+    return html`
+      <button
+        type="button"
+        class="timeline-block ${block.current ? "current" : ""} ${block.selected ? "selected" : ""}"
+        style="
+          background: ${appearance.background};
+          grid-column: ${column};
+          height: ${blockHeight}px;
+        "
+        title=${tooltip}
+        aria-label=${tooltip}
+        @click=${() =>
+          isDay
+            ? this._openPracticeDayModal(practice.id, goal.id, block.start)
+            : this._expandPracticeTimelineBlock(timelineKey, block)}
+      ></button>
+    `;
+  }
+
+  _expandPracticeTimelineBlock(timelineKey, block) {
+    const deepestUnit = getNextFinerTimelineUnit(block.unit);
+    if (!deepestUnit) return;
+    this.timelineSelections = {
+      ...this.timelineSelections,
+      [timelineKey]: {
+        focusDate: block.start,
+        deepestUnit,
+      },
+    };
+  }
+
+  _syncTimelineObservers() {
+    if (!this._timelineResizeObserver) return;
+    const currentTimelines = new Set(this.renderRoot.querySelectorAll(".practice-timeline"));
+
+    for (const timeline of this._observedTimelines) {
+      if (!currentTimelines.has(timeline)) this._timelineResizeObserver.unobserve(timeline);
+    }
+    for (const timeline of currentTimelines) {
+      if (!this._observedTimelines.has(timeline)) this._timelineResizeObserver.observe(timeline);
+    }
+    this._observedTimelines = currentTimelines;
   }
 
   _renderAddModal() {

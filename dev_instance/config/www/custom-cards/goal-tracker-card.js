@@ -34,6 +34,12 @@ const PRACTICE_COMPARISONS = [
   "less_than_or_equal",
   "equal",
 ];
+const PRACTICE_DAY_COLORS = {
+  complete: "#2ecc71",
+  partial: "#f1c40f",
+  missed: "#e74c3c",
+  future: "#eee",
+};
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -308,10 +314,6 @@ function getExpectedProgressPercent(goal, nowValue = new Date()) {
   return Math.round(((now.getTime() - start.getTime()) / (end.getTime() - start.getTime())) * 100);
 }
 
-function isTodayForGoalIndex(goal, index, nowValue = new Date()) {
-  return addDaysIso(goal.start, index) === toIsoDate(nowValue);
-}
-
 function getPracticeValueForDate(practice, dateKey) {
   if (!practice?.entries || !dateKey) return 0;
   return sanitizeNumber(practice.entries[dateKey], 0, 0);
@@ -357,11 +359,291 @@ function isPracticePartialForDate(practice, dateKey) {
   return value >= Math.min(minimum, maximum) && value <= Math.max(minimum, maximum);
 }
 
-function getPracticeDayColor(practice, dateKey, nowValue = new Date()) {
-  if (!dateKey || dateKey > toIsoDate(nowValue)) return "#eee";
-  if (isPracticeCompleteForDate(practice, dateKey)) return "#2ecc71";
-  if (isPracticePartialForDate(practice, dateKey)) return "#f1c40f";
-  return "#e74c3c";
+function getPracticeDayStatus(practice, dateKey, nowValue = new Date()) {
+  if (!dateKey || dateKey > toIsoDate(nowValue)) return "future";
+  if (isPracticeCompleteForDate(practice, dateKey)) return "complete";
+  if (isPracticePartialForDate(practice, dateKey)) return "partial";
+  return "missed";
+}
+
+const PRACTICE_BLOCK_MIN_WIDTH = 10;
+const PRACTICE_BLOCK_GAP = 3;
+const PRACTICE_BLOCK_MAX_HEIGHT = 24;
+const PRACTICE_BLOCK_MIN_HEIGHT = 12;
+const PRACTICE_BLOCK_HEIGHT_STEP = 4;
+const PRACTICE_EXPANSION_GROUP_PADDING = 3;
+const PRACTICE_TIMELINE_UNITS = ["day", "week", "month", "year"];
+
+const UNIT_RANK = Object.fromEntries(PRACTICE_TIMELINE_UNITS.map((unit, index) => [unit, index]));
+const STATUS_ORDER = ["complete", "partial", "missed", "future"];
+const MONTH_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function clampDateToRange(dateKey, start, end) {
+  if (!dateKey || dateKey < start) return start;
+  if (dateKey > end) return end;
+  return dateKey;
+}
+
+function periodBounds(dateKey, unit) {
+  const date = parseDate(dateKey);
+  if (!date) return null;
+
+  if (unit === "day") return { start: dateKey, end: dateKey };
+
+  if (unit === "week") {
+    const dayFromMonday = (date.getUTCDay() + 6) % 7;
+    const start = new Date(date);
+    start.setUTCDate(start.getUTCDate() - dayFromMonday);
+    return {
+      start: toIsoDate(start),
+      end: addDaysIso(toIsoDate(start), 6),
+    };
+  }
+
+  if (unit === "month") {
+    return {
+      start: toIsoDate(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1))),
+      end: toIsoDate(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0))),
+    };
+  }
+
+  return {
+    start: `${date.getUTCFullYear()}-01-01`,
+    end: `${date.getUTCFullYear()}-12-31`,
+  };
+}
+
+function createBlock(unit, start, end) {
+  return {
+    unit,
+    start,
+    end,
+    key: `${unit}:${start}:${end}`,
+    days: countDaysBetween(start, end),
+  };
+}
+
+function splitTimelineRange(start, end, unit) {
+  if (
+    !parseDate(start) ||
+    !parseDate(end) ||
+    end < start ||
+    !Object.prototype.hasOwnProperty.call(UNIT_RANK, unit)
+  ) {
+    return [];
+  }
+
+  const blocks = [];
+  let cursor = start;
+  while (cursor && cursor <= end) {
+    const bounds = periodBounds(cursor, unit);
+    if (!bounds) break;
+    const blockEnd = bounds.end < end ? bounds.end : end;
+    blocks.push(createBlock(unit, cursor, blockEnd));
+    cursor = addDaysIso(blockEnd, 1);
+  }
+  return blocks;
+}
+
+function getNextFinerTimelineUnit(unit) {
+  const rank = UNIT_RANK[unit];
+  return rank > 0 ? PRACTICE_TIMELINE_UNITS[rank - 1] : null;
+}
+
+function getTimelineBlockHeight(unit, largestUnit) {
+  const unitRank = UNIT_RANK[unit] ?? 0;
+  const largestRank = UNIT_RANK[largestUnit] ?? unitRank;
+  const rankDifference = Math.max(0, largestRank - unitRank);
+  return Math.max(
+    PRACTICE_BLOCK_MIN_HEIGHT,
+    PRACTICE_BLOCK_MAX_HEIGHT - rankDifference * PRACTICE_BLOCK_HEIGHT_STEP
+  );
+}
+
+function buildVisibleBlocks(start, end, baseUnit, focusDate, deepestUnit) {
+  const deepestRank = UNIT_RANK[deepestUnit] ?? 0;
+  const expandedBlocks = [];
+
+  const expand = (block) => {
+    const containsFocus = block.start <= focusDate && focusDate <= block.end;
+    const finerUnit = getNextFinerTimelineUnit(block.unit);
+    if (!containsFocus || !finerUnit || UNIT_RANK[block.unit] <= deepestRank) {
+      return [{ ...block, selected: containsFocus }];
+    }
+
+    expandedBlocks.push(block);
+    return splitTimelineRange(block.start, block.end, finerUnit).flatMap(expand);
+  };
+
+  return {
+    blocks: splitTimelineRange(start, end, baseUnit).flatMap(expand),
+    expandedBlocks,
+  };
+}
+
+function getTimelineExpansionGroups(timeline) {
+  const blocks = Array.isArray(timeline?.blocks) ? timeline.blocks : [];
+  const expandedBlocks = Array.isArray(timeline?.expandedBlocks) ? timeline.expandedBlocks : [];
+  if (!blocks.length || !expandedBlocks.length) return [];
+
+  return expandedBlocks.map((expandedBlock, depth) => {
+    const startIndex = blocks.findIndex(
+      (block) => block.start >= expandedBlock.start && block.end <= expandedBlock.end
+    );
+    let endIndex = startIndex;
+    while (
+      endIndex + 1 < blocks.length &&
+      blocks[endIndex + 1].start >= expandedBlock.start &&
+      blocks[endIndex + 1].end <= expandedBlock.end
+    ) {
+      endIndex += 1;
+    }
+
+    const descendants = startIndex >= 0 ? blocks.slice(startIndex, endIndex + 1) : [];
+    const tallestDescendant = descendants.reduce(
+      (height, block) => Math.max(height, getTimelineBlockHeight(block.unit, timeline.largestUnit)),
+      0
+    );
+
+    return {
+      key: `expanded:${expandedBlock.key}`,
+      block: expandedBlock,
+      depth,
+      columnStart: startIndex + 1,
+      columnSpan: descendants.length,
+      height: tallestDescendant + PRACTICE_EXPANSION_GROUP_PADDING * 3,
+    };
+  }).filter((group) => group.columnStart > 0 && group.columnSpan > 0);
+}
+
+function chooseBaseUnit(start, end, focusDate, capacity) {
+  for (const unit of PRACTICE_TIMELINE_UNITS) {
+    const fullyExpanded = buildVisibleBlocks(start, end, unit, focusDate, "day").blocks;
+    if (fullyExpanded.length <= capacity) return unit;
+  }
+  return "year";
+}
+
+function createPracticeTimeline({
+  start,
+  end,
+  availableWidth = 600,
+  minBlockWidth = PRACTICE_BLOCK_MIN_WIDTH,
+  gap = PRACTICE_BLOCK_GAP,
+  selection,
+  nowValue = new Date(),
+} = {}) {
+  if (!parseDate(start) || !parseDate(end) || end < start) {
+    return {
+      baseUnit: "day",
+      capacity: 0,
+      focusDate: "",
+      deepestUnit: "day",
+      largestUnit: "day",
+      blocks: [],
+      expandedBlocks: [],
+    };
+  }
+
+  const safeWidth = Number.isFinite(availableWidth) && availableWidth > 0 ? availableWidth : 600;
+  const safeMinimum = Number.isFinite(minBlockWidth) && minBlockWidth > 0
+    ? minBlockWidth
+    : PRACTICE_BLOCK_MIN_WIDTH;
+  const safeGap = Number.isFinite(gap) && gap >= 0 ? gap : PRACTICE_BLOCK_GAP;
+  const capacity = Math.max(1, Math.floor((safeWidth + safeGap) / (safeMinimum + safeGap)));
+  const currentDate = toIsoDate(nowValue);
+  const focusDate = clampDateToRange(selection?.focusDate || currentDate, start, end);
+  const baseUnit = chooseBaseUnit(start, end, focusDate, capacity);
+  const requestedDeepestUnit = PRACTICE_TIMELINE_UNITS.includes(selection?.deepestUnit)
+    ? selection.deepestUnit
+    : "day";
+  const deepestUnit = UNIT_RANK[requestedDeepestUnit] < UNIT_RANK[baseUnit]
+    ? requestedDeepestUnit
+    : baseUnit;
+  const visibleTimeline = buildVisibleBlocks(start, end, baseUnit, focusDate, deepestUnit);
+  const blocks = visibleTimeline.blocks.map((block) => ({
+    ...block,
+    current: block.start <= currentDate && currentDate <= block.end,
+  }));
+  const largestUnit = blocks.reduce(
+    (largest, block) => UNIT_RANK[block.unit] > UNIT_RANK[largest] ? block.unit : largest,
+    "day"
+  );
+
+  return {
+    baseUnit,
+    capacity,
+    focusDate,
+    deepestUnit,
+    largestUnit,
+    blocks,
+    expandedBlocks: visibleTimeline.expandedBlocks,
+  };
+}
+
+function getPracticeBlockAppearance(practice, block, nowValue = new Date()) {
+  const counts = Object.fromEntries(STATUS_ORDER.map((status) => [status, 0]));
+  const total = countDaysBetween(block?.start, block?.end);
+
+  for (let index = 0; index < total; index += 1) {
+    const status = getPracticeDayStatus(practice, addDaysIso(block.start, index), nowValue);
+    counts[status] += 1;
+  }
+
+  const populated = STATUS_ORDER.filter((status) => counts[status] > 0);
+  if (populated.length <= 1) {
+    return {
+      counts,
+      background: PRACTICE_DAY_COLORS[populated[0] || "future"],
+    };
+  }
+
+  let consumed = 0;
+  const stops = [];
+  for (const status of populated) {
+    const startPercent = (consumed / total) * 100;
+    consumed += counts[status];
+    const endPercent = (consumed / total) * 100;
+    stops.push(
+      `${PRACTICE_DAY_COLORS[status]} ${startPercent.toFixed(2)}%`,
+      `${PRACTICE_DAY_COLORS[status]} ${endPercent.toFixed(2)}%`
+    );
+  }
+
+  return {
+    counts,
+    background: `linear-gradient(to right, ${stops.join(", ")})`,
+  };
+}
+
+function formatPracticeBlockLabel(block) {
+  if (!block) return "";
+  if (block.unit === "day") return block.start;
+  if (block.unit === "month") return MONTH_FORMATTER.format(parseDate(block.start));
+  if (block.unit === "year") return block.start.slice(0, 4);
+  return `${DATE_FORMATTER.format(parseDate(block.start))} – ${DATE_FORMATTER.format(parseDate(block.end))}`;
+}
+
+function formatPracticeBlockSummary(block, counts) {
+  const details = STATUS_ORDER
+    .filter((status) => counts?.[status])
+    .map((status) => `${counts[status]} ${status}`)
+    .join(" · ");
+  const range = block.start === block.end ? block.start : `${block.start} – ${block.end}`;
+  const label = formatPracticeBlockLabel(block);
+  return block.unit === "week" || label === range
+    ? `${label}: ${details}`
+    : `${label} (${range}): ${details}`;
 }
 
 const PRACTICE_COMPARISON_LABELS = {
@@ -396,6 +678,8 @@ class GoalTrackerCard extends i {
     showPracticeDayModal: { state: true },
     storageError: { state: true },
     storageNotice: { state: true },
+    timelineWidths: { state: true },
+    timelineSelections: { state: true },
   };
 
   static styles = i$3`
@@ -467,20 +751,75 @@ class GoalTrackerCard extends i {
       z-index: 2;
     }
 
-    .day-indicators {
+    .practice-timeline {
+      overflow-x: auto;
+      padding: ${PRACTICE_EXPANSION_GROUP_PADDING}px;
+      scrollbar-width: thin;
+    }
+
+    .timeline-context {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+      margin-top: 6px;
+      color: var(--secondary-text-color, #666);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .timeline-overview {
+      flex: 0 0 auto;
+      padding: 1px 6px;
+      border: 1px solid var(--divider-color, #ccc);
+      border-radius: 999px;
+      color: var(--primary-text-color, #222);
+      font-weight: 600;
+    }
+
+    .timeline-expanded {
+      min-width: 0;
+    }
+
+    .timeline-grid {
       display: grid;
-      gap: 5px;
+      align-items: end;
+      gap: ${PRACTICE_BLOCK_GAP}px;
       margin-top: 8px;
     }
 
-    .day {
-      height: 20px;
-      background: #eee;
+    .timeline-block {
+      box-sizing: border-box;
+      grid-row: 1;
+      min-width: ${PRACTICE_BLOCK_MIN_WIDTH}px;
+      padding: 0;
+      border: 0;
       border-radius: 4px;
+      cursor: pointer;
+      position: relative;
+      z-index: 1;
     }
 
-    .day.today {
+    .timeline-expansion-outline {
+      align-self: end;
+      box-sizing: border-box;
+      grid-row: 1;
+      margin: 0 -${PRACTICE_EXPANSION_GROUP_PADDING - 1}px -${PRACTICE_EXPANSION_GROUP_PADDING}px;
+      pointer-events: none;
+      border: 1px solid rgba(127, 127, 127, 0.5);
+      border-color: color-mix(in srgb, var(--primary-text-color, #000) 38%, transparent);
+      border-radius: 6px;
+      z-index: 2;
+    }
+
+    .timeline-block.current {
       outline: 2px solid var(--primary-text-color, #000);
+      outline-offset: 1px;
+      z-index: 3;
+    }
+
+    .timeline-block.selected:not(.current) {
+      outline: 2px solid var(--primary-color, #3498db);
       outline-offset: 1px;
     }
 
@@ -753,10 +1092,37 @@ class GoalTrackerCard extends i {
     this.showPracticeDayModal = false;
     this.storageError = "";
     this.storageNotice = "";
+    this.timelineWidths = {};
+    this.timelineSelections = {};
     this._loaded = false;
     this._loadingGoals = false;
     this._seededConfig = false;
     this._migratedLocalStorage = false;
+    this._timelineResizeObserver = null;
+    this._observedTimelines = new Set();
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    if (!this._timelineResizeObserver && globalThis.ResizeObserver) {
+      this._timelineResizeObserver = new ResizeObserver((entries) => {
+        let nextWidths = this.timelineWidths;
+        for (const entry of entries) {
+          const timelineKey = entry.target.dataset.timelineKey;
+          const width = Math.floor(entry.contentRect.width);
+          if (!timelineKey || width <= 0 || this.timelineWidths[timelineKey] === width) continue;
+          if (nextWidths === this.timelineWidths) nextWidths = { ...this.timelineWidths };
+          nextWidths[timelineKey] = width;
+        }
+        if (nextWidths !== this.timelineWidths) this.timelineWidths = nextWidths;
+      });
+    }
+  }
+
+  disconnectedCallback() {
+    this._timelineResizeObserver?.disconnect();
+    this._observedTimelines.clear();
+    super.disconnectedCallback();
   }
 
   setConfig(config) {
@@ -775,6 +1141,7 @@ class GoalTrackerCard extends i {
     if ((changed.has("hass") || changed.has("config")) && !this._loaded) {
       this._loadGoals();
     }
+    this._syncTimelineObservers();
   }
 
   render() {
@@ -806,7 +1173,6 @@ class GoalTrackerCard extends i {
   }
 
   _renderGoal(goal) {
-    const totalDays = countDaysBetween(goal.start, goal.end);
     const linkedPractices = this.practices.filter((practice) => practice.goalIds.includes(goal.id));
 
     return b`
@@ -839,7 +1205,7 @@ class GoalTrackerCard extends i {
         ${linkedPractices.length
           ? b`
               <div class="practice-list">
-                ${linkedPractices.map((practice) => this._renderPracticeForGoal(goal, practice, totalDays))}
+                ${linkedPractices.map((practice) => this._renderPracticeForGoal(goal, practice))}
               </div>
             `
           : b`<div class="practice-empty">No linked practices.</div>`}
@@ -847,13 +1213,31 @@ class GoalTrackerCard extends i {
     `;
   }
 
-  _renderPracticeForGoal(goal, practice, totalDays) {
+  _renderPracticeForGoal(goal, practice) {
     const targetLabel = practice.mode === "checkbox"
       ? "done / missed"
       : `${PRACTICE_COMPARISON_SYMBOLS[practice.comparison] || "≥"} ${practice.targetPerDay} ${practice.unit || "units"}/day`;
     const partialLabel = practice.mode === "number" && practice.partialProgressEnabled
       ? `, partial ${practice.partialProgressMin}–${practice.partialProgressMax}`
       : "";
+    const timelineKey = `${goal.id}::${practice.id}`;
+    const timelineWidth = this.timelineWidths[timelineKey] || 600;
+    const now = new Date();
+    const timeline = createPracticeTimeline({
+      start: goal.start,
+      end: goal.end,
+      availableWidth: timelineWidth,
+      selection: this.timelineSelections[timelineKey],
+      nowValue: now,
+    });
+    const minimumGridWidth = Math.max(
+      0,
+      timeline.blocks.length * (PRACTICE_BLOCK_MIN_WIDTH + PRACTICE_BLOCK_GAP) - PRACTICE_BLOCK_GAP
+    );
+    const overviewUnit = `${timeline.baseUnit[0].toUpperCase()}${timeline.baseUnit.slice(1)}`;
+    const expandedPath = timeline.expandedBlocks.map(formatPracticeBlockLabel).join(" › ");
+    const expandedUnit = `${timeline.deepestUnit}s`;
+    const expansionGroups = getTimelineExpansionGroups(timeline);
 
     return b`
       <div class="practice-row">
@@ -866,24 +1250,111 @@ class GoalTrackerCard extends i {
             <button class="delete-button" @click=${() => this._confirmRemovePractice(practice.id)}>Delete</button>
           </div>
         </div>
-        <div class="day-indicators" style="grid-template-columns: repeat(${Math.max(totalDays, 1)}, 1fr);">
-          ${Array.from({ length: totalDays }, (_, i) => {
-            const dateKey = addDaysIso(goal.start, i);
-            const value = getPracticeValueForDate(practice, dateKey);
-            const unit = practice.mode === "checkbox" ? (value > 0 ? "done" : "missed") : `${value} ${practice.unit}`;
-            const tooltip = `${dateKey}: ${unit}`;
-            return b`
+        <div class="timeline-context" aria-live="polite">
+          <span class="timeline-overview">${overviewUnit} overview</span>
+          <span class="timeline-expanded">
+            ${expandedPath
+              ? b`Expanded: ${expandedPath} → ${expandedUnit}`
+              : "All days shown"}
+          </span>
+        </div>
+        <div
+          class="practice-timeline"
+          data-timeline-key=${timelineKey}
+          aria-label="${practice.name || "Practice"} progress timeline"
+        >
+          <div
+            class="timeline-grid"
+            style="
+              grid-template-columns: repeat(${Math.max(timeline.blocks.length, 1)}, minmax(${PRACTICE_BLOCK_MIN_WIDTH}px, 1fr));
+              min-width: ${minimumGridWidth}px;
+            "
+          >
+            ${timeline.blocks.map((block, index) =>
+              this._renderPracticeTimelineBlock(
+                goal,
+                practice,
+                timelineKey,
+                block,
+                timeline.largestUnit,
+                index + 1,
+                now
+              )
+            )}
+            ${expansionGroups.map((group) => b`
               <div
-                class="day ${isTodayForGoalIndex(goal, i) ? "today" : ""}"
-                style="background:${getPracticeDayColor(practice, dateKey)}; cursor: pointer;"
-                title="${tooltip}"
-                @click=${() => this._openPracticeDayModal(practice.id, goal.id, dateKey)}
+                class="timeline-expansion-outline"
+                style="
+                  grid-column: ${group.columnStart} / span ${group.columnSpan};
+                  height: ${group.height}px;
+                "
+                aria-hidden="true"
               ></div>
-            `;
-          })}
+            `)}
+          </div>
         </div>
       </div>
     `;
+  }
+
+  _renderPracticeTimelineBlock(goal, practice, timelineKey, block, largestUnit, column, now) {
+    const appearance = getPracticeBlockAppearance(practice, block, now);
+    const isDay = block.unit === "day";
+    const finerUnit = getNextFinerTimelineUnit(block.unit);
+    const value = isDay ? getPracticeValueForDate(practice, block.start) : 0;
+    const dayValue = appearance.counts.future === 1
+      ? "future"
+      : practice.mode === "checkbox"
+        ? (value > 0 ? "done" : "missed")
+        : `${value} ${practice.unit}`;
+    const summary = isDay
+      ? `${block.start}: ${dayValue}`
+      : formatPracticeBlockSummary(block, appearance.counts);
+    const tooltip = finerUnit ? `${summary}. Click to expand to ${finerUnit}s.` : summary;
+    const blockHeight = getTimelineBlockHeight(block.unit, largestUnit);
+
+    return b`
+      <button
+        type="button"
+        class="timeline-block ${block.current ? "current" : ""} ${block.selected ? "selected" : ""}"
+        style="
+          background: ${appearance.background};
+          grid-column: ${column};
+          height: ${blockHeight}px;
+        "
+        title=${tooltip}
+        aria-label=${tooltip}
+        @click=${() =>
+          isDay
+            ? this._openPracticeDayModal(practice.id, goal.id, block.start)
+            : this._expandPracticeTimelineBlock(timelineKey, block)}
+      ></button>
+    `;
+  }
+
+  _expandPracticeTimelineBlock(timelineKey, block) {
+    const deepestUnit = getNextFinerTimelineUnit(block.unit);
+    if (!deepestUnit) return;
+    this.timelineSelections = {
+      ...this.timelineSelections,
+      [timelineKey]: {
+        focusDate: block.start,
+        deepestUnit,
+      },
+    };
+  }
+
+  _syncTimelineObservers() {
+    if (!this._timelineResizeObserver) return;
+    const currentTimelines = new Set(this.renderRoot.querySelectorAll(".practice-timeline"));
+
+    for (const timeline of this._observedTimelines) {
+      if (!currentTimelines.has(timeline)) this._timelineResizeObserver.unobserve(timeline);
+    }
+    for (const timeline of currentTimelines) {
+      if (!this._observedTimelines.has(timeline)) this._timelineResizeObserver.observe(timeline);
+    }
+    this._observedTimelines = currentTimelines;
   }
 
   _renderAddModal() {

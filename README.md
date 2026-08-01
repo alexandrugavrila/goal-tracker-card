@@ -10,7 +10,7 @@ A Home Assistant integration and Lovelace card for tracking goals with progress 
 - Native touchscreen keyboard support through standard text, decimal, and numeric inputs
 - Goals with start and end dates, including increasing or decreasing numeric targets
 - Actual progress with an expected-progress marker
-- Linked practice rows with their own days-per-week cadence and editable daily numeric or done/missed values
+- Linked practice rows with their own days-per-week cadence, editable daily values, and adaptive day, week, month, and year timelines
 - Numeric practice targets with `>`, `≥`, `<`, `≤`, or `=` comparisons and optional partial-progress ranges
 - Many-to-many links between goals and practices
 - Compact summary sensor for automations and dashboards
@@ -66,6 +66,8 @@ Goal progress and practice accountability are intentionally separate. Goal progr
 Each goal stores a starting value, current value, target value, start date, and end date. The progress bar works in either direction, such as moving from 0 to 100 pages or from 240 to 220 pounds. Days per week belongs to each practice rather than to the goal.
 
 Numeric practices can compare each logged value against the daily target using greater than, greater than or equal to, less than, less than or equal to, or equal to. The comparison describes what counts as successful: greater-than targets are meant to be exceeded, while less-than targets are ceilings to stay below. For greater-than comparisons, optional partial progress requires a minimum and runs from that value up to the target. For less-than comparisons, it requires a maximum and runs from the target up to that value. Equal-to comparisons do not support partial progress. Completed values take precedence over the partial range; for example, a calorie target of `≤ 2000` with a partial maximum of `2200` is green at 2000 or below, yellow above 2000 through 2200, and red above 2200.
+
+Practice timelines keep each visible block at least 10 pixels wide. Longer goal ranges automatically condense from days into calendar weeks, months, and years. A context line above the timeline names the overview unit and the exact year, month, or week expanded into finer blocks. The largest visible unit is rendered at full height, with progressively finer units rendered shorter and aligned along the bottom of the timeline. Each active expansion has one padded, faint border surrounding its complete group of child blocks, such as all seven days expanded from a week; nested expansions receive nested group borders. Aggregate blocks show the proportion of complete, partial, missed, and future days as color bands. Click an aggregate to expand it by one level; only one period is expanded at each level. On first render, the period containing today starts expanded through its individual day. When today is outside the goal range, the nearest goal boundary is expanded instead.
 
 ## Development
 
